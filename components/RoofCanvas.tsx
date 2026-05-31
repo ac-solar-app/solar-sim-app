@@ -11,8 +11,6 @@ interface RoofCanvasProps {
 
 export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanvasProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
-  
-  // ★修正：iPadOS 15のバグを回避するため 'anonymous' を完全削除
   const [image] = useImage(imageUrl || '');
   
   const [step, setStep] = useState<'upload' | 'reference' | 'area' | 'done'>('upload');
@@ -23,6 +21,9 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // ★追加：iPadの2本指ピンチ操作の距離を記憶する変数
+  const lastDist = useRef<number>(0);
 
   useEffect(() => {
     const updateSize = () => {
@@ -38,7 +39,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     return () => window.removeEventListener('resize', updateSize);
   }, [imageUrl]);
 
-  // ★修正：iPadOS 15でフリーズしない「FileReader（Base64）」方式に書き換え
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -55,10 +55,15 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
 
   const handleStageClick = (e: any) => {
     if (e.target.className === 'Circle' || e.target.parent?.className === 'Transformer') return;
+    
+    // ★追加：2本指で触っている時や、スワイプ終了時は「タップ（点打ち）」を無効化する
     if (e.evt.type === 'touchend' && e.evt.touches && e.evt.touches.length > 0) return;
+    if (e.evt.changedTouches && e.evt.changedTouches.length > 1) return;
     
     const stage = e.target.getStage();
     const pointerPos = stage.getPointerPosition();
+    if (!pointerPos) return;
+
     const x = (pointerPos.x - stage.x()) / stage.scaleX();
     const y = (pointerPos.y - stage.y()) / stage.scaleY();
 
@@ -71,6 +76,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     }
   };
 
+  // PCのマウスホイール用ズーム
   const handleWheel = (e: any) => {
     e.evt.preventDefault();
     const scaleBy = 1.1; 
@@ -91,6 +97,63 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
       x: pointer.x - mousePointTo.x * limitedScale,
       y: pointer.y - mousePointTo.y * limitedScale,
     });
+  };
+
+  // ★追加：iPadの2本指ピンチズーム処理
+  const handleTouchMove = (e: any) => {
+    e.evt.preventDefault(); // 画面全体がスクロールするのを防ぐ
+    const touch1 = e.evt.touches[0];
+    const touch2 = e.evt.touches[1];
+
+    if (touch1 && touch2) {
+      const stage = e.target.getStage();
+      if (!stage) return;
+
+      const p1 = { x: touch1.clientX, y: touch1.clientY };
+      const p2 = { x: touch2.clientX, y: touch2.clientY };
+
+      // 指と指の間の距離を計算
+      const dist = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+
+      if (!lastDist.current) {
+        lastDist.current = dist;
+        return;
+      }
+
+      const scaleBy = dist / lastDist.current;
+      const oldScale = stage.scaleX();
+      const newScale = Math.max(0.1, Math.min(oldScale * scaleBy, 10));
+
+      // 2本指の中心点を計算して、そこに向かってズームする
+      const center = {
+        x: (p1.x + p2.x) / 2,
+        y: (p1.y + p2.y) / 2,
+      };
+
+      const stageBox = stage.container().getBoundingClientRect();
+      const pointer = {
+        x: center.x - stageBox.left,
+        y: center.y - stageBox.top,
+      };
+
+      const mousePointTo = {
+        x: (pointer.x - stage.x()) / oldScale,
+        y: (pointer.y - stage.y()) / oldScale,
+      };
+
+      setStageScale(newScale);
+      setStagePos({
+        x: pointer.x - mousePointTo.x * newScale,
+        y: pointer.y - mousePointTo.y * newScale,
+      });
+
+      lastDist.current = dist;
+    }
+  };
+
+  const handleTouchEndStage = (e: any) => {
+    lastDist.current = 0; // 指を離したら距離をリセット
+    handleStageClick(e);
   };
 
   const handleNextStep = () => {
@@ -167,9 +230,10 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
         </div>
       </div>
       
+      {/* ★追加：touch-none クラスをつけて、Safari自体のスクロールを止める */}
       <div 
         ref={containerRef}
-        className="border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-200 flex-grow shadow-inner relative cursor-crosshair"
+        className="border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-200 flex-grow shadow-inner relative cursor-crosshair touch-none"
       >
         {step === 'done' && placedPanels.length > 0 && (
           <div className="absolute top-2 left-2 bg-white/90 p-2 rounded text-xs font-bold text-amber-900 z-10 border border-amber-200 pointer-events-none">
@@ -179,8 +243,8 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
         
         {step !== 'done' && (
            <div className="absolute bottom-2 right-2 bg-white/90 p-2 rounded text-[10px] text-gray-600 z-10 pointer-events-none border border-gray-300 shadow-sm">
-             🖱 マウスホイール: 拡大/縮小<br/>
-             👆 ドラッグ: 画像を移動<br/>
+             🖱 ホイール / 2本指: 拡大・縮小<br/>
+             👆 1本指ドラッグ: 画像を移動<br/>
              🎯 点をドラッグ: 位置の微調整
            </div>
         )}
@@ -189,7 +253,8 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
           width={dimensions.width} 
           height={dimensions.height} 
           onClick={handleStageClick} 
-          onTouchEnd={handleStageClick}
+          onTouchMove={handleTouchMove}      // ★追加
+          onTouchEnd={handleTouchEndStage}   // ★追加
           onWheel={handleWheel} 
           scaleX={stageScale}   
           scaleY={stageScale}
@@ -225,7 +290,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
                     key={`ref-${index}`} 
                     x={refPoints[index]} 
                     y={refPoints[index + 1]} 
-                    radius={6 / stageScale} 
+                    radius={15 / stageScale} // ★変更：指で触りやすいように半径を大きくしました
                     fill="#dc2626" 
                     opacity={refOpacity}
                     draggable={step === 'reference'}
@@ -252,7 +317,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
                     key={`area-${index}`} 
                     x={areaPoints[index]} 
                     y={areaPoints[index + 1]} 
-                    radius={5 / stageScale} 
+                    radius={15 / stageScale} // ★変更：ここも指で触りやすいように大きくしました
                     fill="#ef4444" 
                     stroke="#ffffff" 
                     strokeWidth={2 / stageScale}

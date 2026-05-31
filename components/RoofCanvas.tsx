@@ -37,6 +37,28 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     return () => window.removeEventListener('resize', updateSize);
   }, [imageUrl]);
 
+  // ★追加：画像アップロード直後に、キャンバス内にぴったり収まるように（アスペクトフィット）自動調整するuseEffect
+  useEffect(() => {
+    if (image && containerRef.current) {
+      const containerWidth = containerRef.current.offsetWidth;
+      const containerHeight = containerRef.current.offsetHeight;
+
+      if (containerWidth === 0 || containerHeight === 0) return;
+
+      // 画像がコンテナ内に収まるためのスケールを計算（アスペクトフィット）
+      const scaleX = containerWidth / image.width;
+      const scaleY = containerHeight / image.height;
+      const newScale = Math.min(scaleX, scaleY); // どちらか小さい方に合わせる
+
+      // 画像をコンテナの中央に配置するための位置を計算
+      const finalX = (containerWidth - image.width * newScale) / 2;
+      const finalY = (containerHeight - image.height * newScale) / 2;
+
+      setStageScale(newScale);
+      setStagePos({ x: finalX, y: finalY });
+    }
+  }, [image, dimensions]); // image(ロード完了) と dimensions(リサイズ) が変わった時に実行
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -51,7 +73,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     }
   };
 
-  // ★変更：Konva標準の安全なタップ判定を使用
   const handleStageClick = (e: any) => {
     if (e.target.className === 'Circle' || e.target.parent?.className === 'Transformer') return;
     
@@ -71,7 +92,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     }
   };
 
-  // PCのマウスホイール用ズーム（そのまま残しています）
   const handleWheel = (e: any) => {
     e.evt.preventDefault();
     const scaleBy = 1.1; 
@@ -94,7 +114,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     });
   };
 
-  // ★追加：＋ーボタン用のズーム機能（画面の中心に向かって拡大縮小する）
   const handleZoom = (direction: 1 | -1) => {
     const scaleBy = 1.2;
     const oldScale = stageScale;
@@ -152,7 +171,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
 
   if (!imageUrl) {
     return (
-      <div className="w-full h-full flex flex-col items-center justify-center bg-gray-50 border-2 border-dashed border-gray-300 rounded-lg">
+      <div className="w-full h-full flex flex-col items-center justify-center bg-gray-50 border-2 border-dashed border-gray-300 rounded-lg overflow-hidden flex-none">
         <p className="mb-4 text-gray-500 font-medium">ドローン画像をアップロードしてください</p>
         <label className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-md shadow-sm">
           画像を選択する
@@ -165,8 +184,8 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
   const refOpacity = step === 'reference' ? 1 : 0.4;
 
   return (
-    <div className="w-full h-full flex flex-col">
-      <div className="flex justify-between items-center mb-2 px-4">
+    <div className="w-full h-full flex flex-col overflow-hidden">
+      <div className="flex justify-between items-center mb-2 px-4 flex-none">
         <div className="flex items-center space-x-2">
           {step === 'reference' && <p className="text-sm font-bold text-red-600 animate-pulse">【Step 1】屋根の「軒」に沿って、2点をタップし基準線を引いてください</p>}
           {step === 'area' && <p className="text-sm font-bold text-blue-600 animate-pulse">【Step 2】屋根の角をタップして、エリアを囲んでください</p>}
@@ -196,23 +215,20 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
         ref={containerRef}
         className="border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-200 flex-grow shadow-inner relative cursor-crosshair touch-none"
       >
-        {/* ★追加：右上の＋ー拡大縮小ボタン */}
-        {step !== 'done' && (
-          <div className="absolute top-2 right-2 flex flex-col gap-2 z-10">
-            <button 
-              onClick={() => handleZoom(1)} 
-              className="w-12 h-12 bg-white/90 border border-gray-300 rounded-lg shadow-md flex items-center justify-center text-2xl font-bold text-gray-700 hover:bg-gray-100 touch-manipulation"
-            >
-              ＋
-            </button>
-            <button 
-              onClick={() => handleZoom(-1)} 
-              className="w-12 h-12 bg-white/90 border border-gray-300 rounded-lg shadow-md flex items-center justify-center text-2xl font-bold text-gray-700 hover:bg-gray-100 touch-manipulation"
-            >
-              －
-            </button>
-          </div>
-        )}
+        <div className="absolute top-2 right-2 flex flex-col gap-2 z-10">
+          <button 
+            onClick={() => handleZoom(1)} 
+            className="w-12 h-12 bg-white/90 border border-gray-300 rounded-lg shadow-md flex items-center justify-center text-2xl font-bold text-gray-700 hover:bg-gray-100 touch-manipulation"
+          >
+            ＋
+          </button>
+          <button 
+            onClick={() => handleZoom(-1)} 
+            className="w-12 h-12 bg-white/90 border border-gray-300 rounded-lg shadow-md flex items-center justify-center text-2xl font-bold text-gray-700 hover:bg-gray-100 touch-manipulation"
+          >
+            －
+          </button>
+        </div>
 
         {step === 'done' && placedPanels.length > 0 && (
           <div className="absolute top-2 left-2 bg-white/90 p-2 rounded text-xs font-bold text-amber-900 z-10 border border-amber-200 pointer-events-none">
@@ -220,19 +236,17 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
           </div>
         )}
         
-        {step !== 'done' && (
-           <div className="absolute bottom-2 right-2 bg-white/90 p-2 rounded text-[10px] text-gray-600 z-10 pointer-events-none border border-gray-300 shadow-sm">
-             🖱 右上ボタン: 拡大・縮小<br/>
-             👆 1本指ドラッグ: 画像を移動<br/>
-             🎯 点をドラッグ: 位置の微調整
-           </div>
-        )}
+        <div className="absolute bottom-2 right-2 bg-white/90 p-2 rounded text-[10px] text-gray-600 z-10 pointer-events-none border border-gray-300 shadow-sm overflow-hidden">
+          🖱 右上ボタン: 拡大・縮小<br/>
+          👆 1本指ドラッグ: 画像を移動
+          {step !== 'done' && <><br/>🎯 点をドラッグ: 位置の微調整</>}
+        </div>
 
         <Stage 
           width={dimensions.width} 
           height={dimensions.height} 
           onClick={handleStageClick} 
-          onTap={handleStageClick} // ★Konva標準の安定したスマホ用タップ判定
+          onTap={handleStageClick} 
           onWheel={handleWheel} 
           scaleX={stageScale}   
           scaleY={stageScale}
@@ -247,10 +261,11 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
         >
           <Layer>
             {image && (
+               // ★修正：画像の元サイズで描画し、スケールと位置で画面内に収める
                <KonvaImage 
                   image={image} 
-                  width={dimensions.width} 
-                  height={dimensions.width * (image.height / image.width)} 
+                  width={image.width} 
+                  height={image.height} 
                />
             )}
             

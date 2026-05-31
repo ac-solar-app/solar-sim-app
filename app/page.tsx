@@ -263,11 +263,10 @@ export default function Home() {
     setAnnualGen(Math.round(totalAnn));
   };
 
-  // ★復活：左右分割レイアウト（左側キャンバスは画面いっぱいに広がり、右側設定が固定幅450pxで独立スクロール）
   return (
     <main className="flex h-[100dvh] w-full bg-gray-50 text-gray-800 font-sans overflow-hidden">
       
-      {/* 左側：メインキャンバス（画面の残りの幅を100%使い切る） */}
+      {/* 左側：メインキャンバス */}
       <section className="flex-grow p-4 flex flex-col overflow-hidden h-full">
         <header className="mb-2 flex-none">
           <h1 className="text-xl font-bold text-gray-900">Solar Sim Pro</h1>
@@ -280,13 +279,12 @@ export default function Home() {
         </div>
       </section>
 
-      {/* 右側：シミュレーション設定（幅450pxで固定、独自のスクロールバーを設置） */}
+      {/* 右側：シミュレーション設定 */}
       <aside className="w-[450px] bg-white border-l border-gray-200 shadow-sm p-5 flex flex-col overflow-y-auto h-full flex-none">
         <h2 className="text-base font-semibold mb-4 border-b pb-1">シミュレーション設定</h2>
         
         <div className="space-y-4">
           
-          {/* 1. 基準線の実測長 */}
           <div className="p-3 bg-red-50 rounded-lg border border-red-100">
             <h3 className="text-xs font-bold text-red-800 mb-2">1. 基準線の実測長</h3>
             <div className="flex items-center space-x-2">
@@ -300,7 +298,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* 2. パネル仕様と各種設定 */}
           <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 shadow-inner">
             <div className="flex justify-between items-center mb-2">
               <h3 className="text-xs font-bold text-gray-700">2. 屋根傾斜 & パネル仕様</h3>
@@ -360,7 +357,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* 3. 環境データ */}
           <div className="p-3 bg-green-50 rounded-lg border border-green-100">
             <h3 className="text-xs font-bold text-green-800 mb-2">3. 環境データ (日射量用)</h3>
             <div className="space-y-2.5">
@@ -428,14 +424,27 @@ export default function Home() {
                     <p className="font-bold text-gray-700">月別予測発電量</p>
                     <p className="text-[10px] text-gray-500">年間: <span className="font-bold text-blue-600 text-sm">{annualGen.toLocaleString()}</span> kWh</p>
                   </div>
-                  <div className="grid grid-cols-1 gap-y-1">
-                    {monthlyGen.map((val, i) => (
-                      <div key={i} className="flex justify-between border-b border-gray-50 py-0.5">
-                        <span className="text-gray-400">{i + 1}月</span>
-                        <span className="font-bold text-gray-700">{val.toLocaleString()} kWh</span>
-                      </div>
-                    ))}
+                  
+                  {/* ★修正：月別データを2列（1〜6月、7〜12月）に変更 */}
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    <div className="space-y-1">
+                      {monthlyGen.slice(0, 6).map((val, i) => (
+                        <div key={i} className="flex justify-between border-b border-gray-50 py-0.5">
+                          <span className="text-gray-400">{i + 1}月</span>
+                          <span className="font-bold text-gray-700">{val.toLocaleString()} kWh</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="space-y-1">
+                      {monthlyGen.slice(6, 12).map((val, i) => (
+                        <div key={i + 6} className="flex justify-between border-b border-gray-50 py-0.5">
+                          <span className="text-gray-400">{i + 7}月</span>
+                          <span className="font-bold text-gray-700">{val.toLocaleString()} kWh</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
+                  
                 </div>
               )}
             </div>

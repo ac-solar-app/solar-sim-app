@@ -263,11 +263,12 @@ export default function Home() {
     setAnnualGen(Math.round(totalAnn));
   };
 
-  // ★修正：キャンバス枠の高さを「h-[55dvh]」で絶対ロック。溢れたものは強制非表示（overflow-hidden）
+  // ★復活：左右分割レイアウト（左側キャンバスは画面いっぱいに広がり、右側設定が固定幅450pxで独立スクロール）
   return (
-    <main className="flex flex-col h-[100dvh] w-full bg-gray-50 text-gray-800 font-sans overflow-hidden">
-      {/* 上部：キャンバスエリア（何があっても55dvhから縦に伸びないように完全固定） */}
-      <section className="flex-none h-[55dvh] p-4 flex flex-col overflow-hidden max-h-[55dvh]">
+    <main className="flex h-[100dvh] w-full bg-gray-50 text-gray-800 font-sans overflow-hidden">
+      
+      {/* 左側：メインキャンバス（画面の残りの幅を100%使い切る） */}
+      <section className="flex-grow p-4 flex flex-col overflow-hidden h-full">
         <header className="mb-2 flex-none">
           <h1 className="text-xl font-bold text-gray-900">Solar Sim Pro</h1>
         </header>
@@ -279,157 +280,168 @@ export default function Home() {
         </div>
       </section>
 
-      {/* 下部：シミュレーション設定エリア（上がロックされたので、下半分で綺麗にスクロールする） */}
-      <section className="flex-grow bg-white border-t border-gray-200 shadow-sm p-4 overflow-y-auto">
-        <div className="max-w-6xl mx-auto">
-          <h2 className="text-base font-semibold mb-4 border-b pb-1 sticky top-0 bg-white z-10">シミュレーション設定</h2>
+      {/* 右側：シミュレーション設定（幅450pxで固定、独自のスクロールバーを設置） */}
+      <aside className="w-[450px] bg-white border-l border-gray-200 shadow-sm p-5 flex flex-col overflow-y-auto h-full flex-none">
+        <h2 className="text-base font-semibold mb-4 border-b pb-1">シミュレーション設定</h2>
+        
+        <div className="space-y-4">
           
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            
-            {/* 1. 基準線の実測長 */}
-            <div className="p-3 bg-red-50 rounded-lg border border-red-100">
-              <h3 className="text-xs font-bold text-red-800 mb-2">1. 基準線の実測長</h3>
-              <div className="flex items-center space-x-2">
+          {/* 1. 基準線の実測長 */}
+          <div className="p-3 bg-red-50 rounded-lg border border-red-100">
+            <h3 className="text-xs font-bold text-red-800 mb-2">1. 基準線の実測長</h3>
+            <div className="flex items-center space-x-2">
+              <input 
+                type="number" 
+                value={calibLength}
+                onChange={(e) => setCalibLength(Number(e.target.value))}
+                className="border p-2 rounded-md w-full text-right bg-white text-sm font-medium"
+              />
+              <span className="text-xs text-gray-700 w-16">メートル</span>
+            </div>
+          </div>
+
+          {/* 2. パネル仕様と各種設定 */}
+          <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 shadow-inner">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="text-xs font-bold text-gray-700">2. 屋根傾斜 & パネル仕様</h3>
+              <div className="flex items-center space-x-1">
+                <span className="text-xs text-gray-600">傾斜:</span>
                 <input 
                   type="number" 
-                  value={calibLength}
-                  onChange={(e) => setCalibLength(Number(e.target.value))}
-                  className="border p-1.5 rounded-md w-full text-right bg-white text-sm"
+                  value={roofPitch}
+                  onChange={(e) => setRoofPitch(Number(e.target.value))}
+                  className="border p-1 rounded w-14 text-right text-xs bg-white font-medium"
+                  step={0.5}
+                  min={0}
                 />
-                <span className="text-xs text-gray-700">メートル</span>
+                <span className="text-xs text-gray-700">寸</span>
               </div>
             </div>
 
-            {/* 2. パネル仕様と各種設定 */}
-            <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
-              <div className="flex justify-between items-center mb-2">
-                <h3 className="text-xs font-bold text-gray-700">2. パネル仕様</h3>
-                <div className="flex items-center space-x-1">
-                  <span className="text-[11px] text-gray-600">傾斜:</span>
-                  <input 
-                    type="number" 
-                    value={roofPitch}
-                    onChange={(e) => setRoofPitch(Number(e.target.value))}
-                    className="border p-0.5 rounded w-12 text-right text-xs bg-white"
-                    step={0.5}
-                    min={0}
-                  />
-                  <span className="text-[11px] text-gray-700">寸</span>
-                </div>
-              </div>
-
-              <div className="space-y-2">
+            <div className="space-y-2.5">
+              <div>
+                <label className="text-[10px] text-gray-500 block mb-0.5">メーカー</label>
                 <select 
                   value={maker}
                   onChange={(e) => setMaker(e.target.value)}
-                  className="border p-1 rounded-md w-full bg-white text-xs"
+                  className="border p-2 rounded-md w-full bg-white text-xs font-medium"
                 >
                   {Object.keys(PANEL_DATA).map((m) => (
                     <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 block mb-0.5">型番 (寸法・出力)</label>
                 <select 
                   value={panelId}
                   onChange={(e) => setPanelId(e.target.value)}
-                  className="border p-1 rounded-md w-full bg-white text-xs"
+                  className="border p-2 rounded-md w-full bg-white text-xs font-medium"
                 >
                   {PANEL_DATA[maker as keyof typeof PANEL_DATA].map((p) => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
                 </select>
-                <div className="flex items-center justify-between pt-1 border-t border-gray-200">
-                  <span className="text-[11px] text-gray-600">離隔幅:</span>
-                  <div className="flex items-center space-x-1">
-                    <input 
-                      type="number" 
-                      value={panelMarginMm}
-                      onChange={(e) => setPanelMarginMm(Number(e.target.value))}
-                      className="border p-0.5 rounded w-16 text-right text-xs bg-white"
-                      min={0}
-                      step={100}
-                    />
-                    <span className="text-[11px] text-gray-600">mm</span>
-                  </div>
+              </div>
+              <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+                <span className="text-xs text-gray-600 font-bold">離隔幅 (屋根端からの隙間):</span>
+                <div className="flex items-center space-x-1">
+                  <input 
+                    type="number" 
+                    value={panelMarginMm}
+                    onChange={(e) => setPanelMarginMm(Number(e.target.value))}
+                    className="border p-1 rounded w-20 text-right text-xs bg-white font-medium"
+                    min={0}
+                    step={100}
+                  />
+                  <span className="text-xs text-gray-600">mm</span>
                 </div>
               </div>
             </div>
+          </div>
 
-            {/* 3. 環境データ */}
-            <div className="p-3 bg-green-50 rounded-lg border border-green-100">
-              <h3 className="text-xs font-bold text-green-800 mb-2">3. 環境データ</h3>
-              <div className="space-y-2">
+          {/* 3. 環境データ */}
+          <div className="p-3 bg-green-50 rounded-lg border border-green-100">
+            <h3 className="text-xs font-bold text-green-800 mb-2">3. 環境データ (日射量用)</h3>
+            <div className="space-y-2.5">
+              <div>
+                <label className="text-[10px] text-gray-500 block mb-0.5">郵便番号</label>
                 <input 
                   type="text" 
-                  placeholder="郵便番号 (例: 980-0003)"
+                  placeholder="例: 980-0003"
                   value={zipCode}
                   onChange={(e) => setZipCode(e.target.value)}
-                  className="border p-1.5 rounded-md w-full text-xs bg-white"
+                  className="border p-2 rounded-md w-full text-xs bg-white font-medium"
                 />
                 {locationInfo.address && (
-                  <div className="text-[10px] text-gray-600 bg-white/80 p-1 rounded border border-green-200 truncate">
+                  <div className="text-[10px] text-gray-700 bg-white p-1.5 rounded border border-green-200 mt-1 shadow-sm">
                     📍 {locationInfo.address}
                   </div>
                 )}
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-gray-600">方位:</span>
-                  <select 
-                    value={azimuth}
-                    onChange={(e) => setAzimuth(Number(e.target.value))}
-                    className="border p-1 rounded-md w-24 bg-white text-xs"
-                  >
-                    <option value={1.0}>南</option>
-                    <option value={0.95}>南東・南西</option>
-                    <option value={0.84}>東・西</option>
-                    <option value={0.71}>北東・北西</option>
-                    <option value={0.64}>北</option>
-                  </select>
-                </div>
+              </div>
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-gray-600 font-bold">屋根の方位:</span>
+                <select 
+                  value={azimuth}
+                  onChange={(e) => setAzimuth(Number(e.target.value))}
+                  className="border p-1.5 rounded-md w-28 bg-white text-xs font-medium"
+                >
+                  <option value={1.0}>南</option>
+                  <option value={0.95}>南東・南西</option>
+                  <option value={0.84}>東・西</option>
+                  <option value={0.71}>北東・北西</option>
+                  <option value={0.64}>北</option>
+                </select>
               </div>
             </div>
-
-          </div>
-
-          {/* ボタンと結果表示 */}
-          <div className="mt-4 border-t border-gray-200 pt-4">
-            <button 
-              onClick={handleSimulate}
-              className="w-full max-w-xs mx-auto block bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-lg transition-colors shadow-md text-sm mb-4"
-            >
-              シミュレーション実行
-            </button>
-            
-            {resultCount > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-8">
-                <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 shadow-inner flex flex-col justify-center items-center">
-                  <p className="text-xs text-blue-600 font-bold mb-1">想定最大システム容量</p>
-                  <p className="text-3xl font-extrabold text-blue-800">
-                    {resultCapacity} <span className="text-lg font-normal">kW</span>
-                  </p>
-                  <p className="text-xs text-gray-500 mt-1">設置枚数: {resultCount} 枚</p>
-                </div>
-
-                {annualGen > 0 && (
-                  <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm text-xs">
-                    <div className="flex justify-between items-end mb-2 border-b pb-1">
-                      <p className="font-bold text-gray-700">月別予測発電量</p>
-                      <p className="text-[11px] text-gray-500">年間: <span className="font-bold text-blue-600 text-sm">{annualGen.toLocaleString()}</span> kWh</p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-                      {monthlyGen.map((val, i) => (
-                        <div key={i} className="flex justify-between border-b border-gray-50 py-0.5">
-                          <span className="text-gray-400">{i + 1}月</span>
-                          <span className="font-bold text-gray-700">{val.toLocaleString()} kwh</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
 
         </div>
-      </section>
+
+        {/* ボタンと結果表示 */}
+        <div className="mt-6 border-t border-gray-200 pt-4 flex-grow flex flex-col justify-end">
+          <button 
+            onClick={handleSimulate}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-md text-sm mb-4"
+          >
+            シミュレーション実行
+          </button>
+          
+          {resultCount > 0 && (
+            <div className="space-y-4">
+              <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 shadow-inner text-center">
+                <p className="text-[11px] text-blue-600 font-bold mb-0.5">想定最大システム容量</p>
+                <p className="text-3xl font-extrabold text-blue-800">
+                  {resultCapacity} <span className="text-lg font-normal">kW</span>
+                </p>
+                <p className="text-xs text-gray-600 font-medium mt-0.5">設置枚数: {resultCount} 枚</p>
+              </div>
+
+              {annualGen > 0 && (
+                <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm text-xs">
+                  {locationInfo.station && (
+                    <div className="mb-2 p-1.5 bg-green-50 border border-green-100 rounded text-[10px] text-gray-600">
+                      📡 <strong>NEDO観測地点:</strong> {locationInfo.station}
+                    </div>
+                  )}
+                  <div className="flex justify-between items-end mb-2 border-b pb-1">
+                    <p className="font-bold text-gray-700">月別予測発電量</p>
+                    <p className="text-[10px] text-gray-500">年間: <span className="font-bold text-blue-600 text-sm">{annualGen.toLocaleString()}</span> kWh</p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-y-1">
+                    {monthlyGen.map((val, i) => (
+                      <div key={i} className="flex justify-between border-b border-gray-50 py-0.5">
+                        <span className="text-gray-400">{i + 1}月</span>
+                        <span className="font-bold text-gray-700">{val.toLocaleString()} kWh</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </aside>
     </main>
   );
 }

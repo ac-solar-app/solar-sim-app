@@ -12,8 +12,8 @@ interface RoofCanvasProps {
 export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanvasProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   
-  // ★重要：iPad（Safari）のセキュリティブロックを解除するために crossOrigin を指定
-  const [image] = useImage(imageUrl || '', 'anonymous');
+  // ★修正：iPadOS 15のバグを回避するため 'anonymous' を完全削除
+  const [image] = useImage(imageUrl || '');
   
   const [step, setStep] = useState<'upload' | 'reference' | 'area' | 'done'>('upload');
   const [refPoints, setRefPoints] = useState<number[]>([]);
@@ -38,12 +38,18 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     return () => window.removeEventListener('resize', updateSize);
   }, [imageUrl]);
 
+  // ★修正：iPadOS 15でフリーズしない「FileReader（Base64）」方式に書き換え
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const url = URL.createObjectURL(file);
-      setImageUrl(url);
-      setStep('reference'); 
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          setImageUrl(event.target.result as string);
+          setStep('reference'); 
+        }
+      };
+      reader.readAsDataURL(file);
     }
   };
 

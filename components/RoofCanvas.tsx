@@ -1,15 +1,16 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Stage, Layer, Image as KonvaImage, Line, Circle } from 'react-konva';
 import useImage from 'use-image';
 
 interface RoofCanvasProps {
   onPointsConfirmed: (refLine: number[], areaPoints: number[]) => void;
   placedPanels: Array<number[]>; 
+  simulateTrigger?: number; // ★追加：シミュレーション実行ボタンが押された回数を受け取る
 }
 
-export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanvasProps) {
+export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTrigger }: RoofCanvasProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [image] = useImage(imageUrl || '');
   
@@ -37,27 +38,37 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     return () => window.removeEventListener('resize', updateSize);
   }, [imageUrl]);
 
-  // ★追加：画像アップロード直後に、キャンバス内にぴったり収まるように（アスペクトフィット）自動調整するuseEffect
-  useEffect(() => {
+  // ★追加：画像をキャンバス全体にぴったり収める（原寸に戻す）処理を共通化
+  const fitImageToStage = useCallback(() => {
     if (image && containerRef.current) {
       const containerWidth = containerRef.current.offsetWidth;
       const containerHeight = containerRef.current.offsetHeight;
 
       if (containerWidth === 0 || containerHeight === 0) return;
 
-      // 画像がコンテナ内に収まるためのスケールを計算（アスペクトフィット）
       const scaleX = containerWidth / image.width;
       const scaleY = containerHeight / image.height;
-      const newScale = Math.min(scaleX, scaleY); // どちらか小さい方に合わせる
+      const newScale = Math.min(scaleX, scaleY); 
 
-      // 画像をコンテナの中央に配置するための位置を計算
       const finalX = (containerWidth - image.width * newScale) / 2;
       const finalY = (containerHeight - image.height * newScale) / 2;
 
       setStageScale(newScale);
       setStagePos({ x: finalX, y: finalY });
     }
-  }, [image, dimensions]); // image(ロード完了) と dimensions(リサイズ) が変わった時に実行
+  }, [image]);
+
+  // 画像が読み込まれた時、または画面サイズが変わった時に全体表示する
+  useEffect(() => {
+    fitImageToStage();
+  }, [fitImageToStage, dimensions]);
+
+  // ★追加：親から「シミュレーション実行」の合図（simulateTrigger）が来たら、全体表示に戻す
+  useEffect(() => {
+    if (simulateTrigger && simulateTrigger > 0) {
+      fitImageToStage();
+    }
+  }, [simulateTrigger, fitImageToStage]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -167,6 +178,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     setStageScale(1);
     setStagePos({ x: 0, y: 0 });
     onPointsConfirmed([], []);
+    fitImageToStage(); // やり直し時も全体表示に戻す
   };
 
   if (!imageUrl) {
@@ -261,7 +273,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
         >
           <Layer>
             {image && (
-               // ★修正：画像の元サイズで描画し、スケールと位置で画面内に収める
                <KonvaImage 
                   image={image} 
                   width={image.width} 
@@ -270,11 +281,12 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
             )}
             
             {step === 'done' && placedPanels.map((pts, index) => (
-              <Line key={`panel-${index}`} points={pts} closed={true} fill="rgba(251, 191, 36, 0.6)" stroke="#f59e0b" strokeWidth={1} />
+              <Line key={`panel-${index}`} points={pts} closed={true} fill="rgba(251, 191, 36, 0.6)" stroke="#f59e0b" strokeWidth={1 / stageScale} />
             ))}
 
             {refPoints.length > 0 && (
-              <Line points={refPoints} stroke="#dc2626" strokeWidth={3} dash={[10, 5]} opacity={refOpacity} />
+              // ★修正：線の太さを倍の「6」に（ズームしても太さが一定になるように調整）
+              <Line points={refPoints} stroke="#dc2626" strokeWidth={6 / stageScale} dash={[10 / stageScale, 5 / stageScale]} opacity={refOpacity} />
             )}
             {refPoints.map((_, index) => {
               if (index % 2 === 0) {
@@ -283,7 +295,8 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
                     key={`ref-${index}`} 
                     x={refPoints[index]} 
                     y={refPoints[index + 1]} 
-                    radius={15 / stageScale} 
+                    // ★修正：点の大きさを半分の「7.5」に
+                    radius={7.5 / stageScale} 
                     fill="#dc2626" 
                     opacity={refOpacity}
                     draggable={step === 'reference'}
@@ -301,7 +314,8 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
             })}
 
             {areaPoints.length > 0 && (
-              <Line points={areaPoints} fill="rgba(59, 130, 246, 0.3)" stroke="#3b82f6" strokeWidth={3 / stageScale} closed={step === 'done'} />
+              // ★修正：青い線の太さも倍の「6」に
+              <Line points={areaPoints} fill="rgba(59, 130, 246, 0.3)" stroke="#3b82f6" strokeWidth={6 / stageScale} closed={step === 'done'} />
             )}
             {areaPoints.map((_, index) => {
               if (index % 2 === 0) {
@@ -310,7 +324,8 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
                     key={`area-${index}`} 
                     x={areaPoints[index]} 
                     y={areaPoints[index + 1]} 
-                    radius={15 / stageScale} 
+                    // ★修正：青い点の大きさも半分の「7.5」に
+                    radius={7.5 / stageScale} 
                     fill="#ef4444" 
                     stroke="#ffffff" 
                     strokeWidth={2 / stageScale}

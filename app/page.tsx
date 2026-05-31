@@ -83,6 +83,9 @@ export default function Home() {
   const [previewPanels, setPreviewPanels] = useState<{x: number, y: number}[]>([]);
   const [readyPanelsPx, setReadyPanelsPx] = useState<Array<number[]>>([]);
 
+  // ★追加：シミュレーション実行のタイミングをキャンバスに伝えるトリガー
+  const [simulateTrigger, setSimulateTrigger] = useState<number>(0);
+
   useEffect(() => {
     setPanelId(PANEL_DATA[maker as keyof typeof PANEL_DATA][0].id);
   }, [maker]);
@@ -261,12 +264,14 @@ export default function Home() {
 
     setMonthlyGen(monthlyData);
     setAnnualGen(Math.round(totalAnn));
+
+    // ★追加：シミュレーション実行ボタンが押されたらトリガーを更新し、キャンバスを原寸に戻す
+    setSimulateTrigger(prev => prev + 1);
   };
 
   return (
     <main className="flex h-[100dvh] w-full bg-gray-50 text-gray-800 font-sans overflow-hidden">
       
-      {/* 左側：メインキャンバス */}
       <section className="flex-grow p-4 flex flex-col overflow-hidden h-full">
         <header className="mb-2 flex-none">
           <h1 className="text-xl font-bold text-gray-900">Solar Sim Pro</h1>
@@ -275,11 +280,11 @@ export default function Home() {
           <RoofCanvas 
             onPointsConfirmed={handlePointsConfirmed} 
             placedPanels={placedPanelsCoords}
+            simulateTrigger={simulateTrigger} // ★キャンバスにトリガーを渡す
           />
         </div>
       </section>
 
-      {/* 右側：シミュレーション設定 */}
       <aside className="w-[450px] bg-white border-l border-gray-200 shadow-sm p-5 flex flex-col overflow-y-auto h-full flex-none">
         <h2 className="text-base font-semibold mb-4 border-b pb-1">シミュレーション設定</h2>
         
@@ -394,7 +399,6 @@ export default function Home() {
 
         </div>
 
-        {/* ボタンと結果表示 */}
         <div className="mt-6 border-t border-gray-200 pt-4 flex-grow flex flex-col justify-end">
           <button 
             onClick={handleSimulate}
@@ -425,7 +429,6 @@ export default function Home() {
                     <p className="text-[10px] text-gray-500">年間: <span className="font-bold text-blue-600 text-sm">{annualGen.toLocaleString()}</span> kWh</p>
                   </div>
                   
-                  {/* ★修正：月別データを2列（1〜6月、7〜12月）に変更 */}
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                     <div className="space-y-1">
                       {monthlyGen.slice(0, 6).map((val, i) => (

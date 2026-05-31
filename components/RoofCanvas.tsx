@@ -20,10 +20,14 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
   const [stageScale, setStageScale] = useState(1);
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  
   const containerRef = useRef<HTMLDivElement>(null);
-
-  // ★追加：iPadの2本指ピンチ操作の距離を記憶する変数
+  
+  // ★追加：キャンバスを直接操作して処理落ちを無くすための「ダイレクト操作」用パーツ
+  const stageRef = useRef<any>(null);
   const lastDist = useRef<number>(0);
+  const lastCenter = useRef<{x: number, y: number} | null>(null);
+  const isPinching = useRef<boolean>(false);
 
   useEffect(() => {
     const updateSize = () => {
@@ -55,10 +59,8 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
 
   const handleStageClick = (e: any) => {
     if (e.target.className === 'Circle' || e.target.parent?.className === 'Transformer') return;
-    
-    // ★追加：2本指で触っている時や、スワイプ終了時は「タップ（点打ち）」を無効化する
-    if (e.evt.type === 'touchend' && e.evt.touches && e.evt.touches.length > 0) return;
-    if (e.evt.changedTouches && e.evt.changedTouches.length > 1) return;
+    // 誤タップ防止
+    if (isPinching.current) return;
     
     const stage = e.target.getStage();
     const pointerPos = stage.getPointerPosition();
@@ -76,7 +78,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     }
   };
 
-  // PCのマウスホイール用ズーム
   const handleWheel = (e: any) => {
     e.evt.preventDefault();
     const scaleBy = 1.1; 
@@ -99,60 +100,89 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     });
   };
 
-  // ★追加：iPadの2本指ピンチズーム処理
+  // ★変更：処理落ちゼロの「ダイレクト操作」モード
   const handleTouchMove = (e: any) => {
-    e.evt.preventDefault(); // 画面全体がスクロールするのを防ぐ
+    e.evt.preventDefault();
     const touch1 = e.evt.touches[0];
     const touch2 = e.evt.touches[1];
 
     if (touch1 && touch2) {
-      const stage = e.target.getStage();
+      isPinching.current = true;
+      const stage = stageRef.current;
       if (!stage) return;
+
+      // 2本指の時は、誤ってドラッグ移動しないように一旦止める
+      if (stage.isDragging()) {
+        stage.stopDrag();
+      }
 
       const p1 = { x: touch1.clientX, y: touch1.clientY };
       const p2 = { x: touch2.clientX, y: touch2.clientY };
 
-      // 指と指の間の距離を計算
+      const getCenter = (p1: any, p2: any) => ({
+        x: (p1.x + p2.x) / 2,
+        y: (p1.y + p2.y) / 2,
+      });
+
+      const newCenter = getCenter(p1, p2);
       const dist = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
 
-      if (!lastDist.current) {
-        lastDist.current = dist;
+      if (!lastCenter.current) {
+        lastCenter.current = newCenter;
         return;
       }
 
-      const scaleBy = dist / lastDist.current;
-      const oldScale = stage.scaleX();
-      const newScale = Math.max(0.1, Math.min(oldScale * scaleBy, 10));
-
-      // 2本指の中心点を計算して、そこに向かってズームする
-      const center = {
-        x: (p1.x + p2.x) / 2,
-        y: (p1.y + p2.y) / 2,
-      };
+      if (!lastDist.current) {
+        lastDist.current = dist;
+      }
 
       const stageBox = stage.container().getBoundingClientRect();
-      const pointer = {
-        x: center.x - stageBox.left,
-        y: center.y - stageBox.top,
+      
+      const pointTo = {
+        x: (newCenter.x - stageBox.left - stage.x()) / stage.scaleX(),
+        y: (newCenter.y - stageBox.top - stage.y()) / stage.scaleX(),
       };
 
-      const mousePointTo = {
-        x: (pointer.x - stage.x()) / oldScale,
-        y: (pointer.y - stage.y()) / oldScale,
+      const scaleBy = dist / lastDist.current;
+      let newScale = stage.scaleX() * scaleBy;
+      newScale = Math.max(0.1, Math.min(newScale, 10));
+
+      // Reactを無視して、キャンバスの画像を直接拡大縮小する（爆速）
+      stage.scaleX(newScale);
+      stage.scaleY(newScale);
+
+      const dx = newCenter.x - lastCenter.current.x;
+      const dy = newCenter.y - lastCenter.current.y;
+
+      const newPos = {
+        x: newCenter.x - stageBox.left - pointTo.x * newScale + dx,
+        y: newCenter.y - stageBox.top - pointTo.y * newScale + dy,
       };
 
-      setStageScale(newScale);
-      setStagePos({
-        x: pointer.x - mousePointTo.x * newScale,
-        y: pointer.y - mousePointTo.y * newScale,
-      });
+      stage.position(newPos);
+      stage.batchDraw();
 
       lastDist.current = dist;
+      lastCenter.current = newCenter;
     }
   };
 
   const handleTouchEndStage = (e: any) => {
-    lastDist.current = 0; // 指を離したら距離をリセット
+    lastDist.current = 0;
+    lastCenter.current = null;
+
+    if (isPinching.current) {
+      // ピンチ操作が終わった時だけ、現在の位置をReactに記憶させる
+      if (stageRef.current) {
+        setStageScale(stageRef.current.scaleX());
+        setStagePos(stageRef.current.position());
+      }
+      // 0.1秒後にピンチ判定を解除（誤タップ防止）
+      setTimeout(() => { isPinching.current = false; }, 100);
+      return;
+    }
+
+    // 1本指のタップだった場合のみ、点を打つ処理へ
     handleStageClick(e);
   };
 
@@ -230,7 +260,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
         </div>
       </div>
       
-      {/* ★追加：touch-none クラスをつけて、Safari自体のスクロールを止める */}
       <div 
         ref={containerRef}
         className="border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-200 flex-grow shadow-inner relative cursor-crosshair touch-none"
@@ -250,11 +279,12 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
         )}
 
         <Stage 
+          ref={stageRef}                     // ★追加：ダイレクト操作の紐付け
           width={dimensions.width} 
           height={dimensions.height} 
           onClick={handleStageClick} 
-          onTouchMove={handleTouchMove}      // ★追加
-          onTouchEnd={handleTouchEndStage}   // ★追加
+          onTouchMove={handleTouchMove}      
+          onTouchEnd={handleTouchEndStage}   
           onWheel={handleWheel} 
           scaleX={stageScale}   
           scaleY={stageScale}
@@ -290,7 +320,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
                     key={`ref-${index}`} 
                     x={refPoints[index]} 
                     y={refPoints[index + 1]} 
-                    radius={15 / stageScale} // ★変更：指で触りやすいように半径を大きくしました
+                    radius={15 / stageScale} 
                     fill="#dc2626" 
                     opacity={refOpacity}
                     draggable={step === 'reference'}
@@ -317,7 +347,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
                     key={`area-${index}`} 
                     x={areaPoints[index]} 
                     y={areaPoints[index + 1]} 
-                    radius={15 / stageScale} // ★変更：ここも指で触りやすいように大きくしました
+                    radius={15 / stageScale} 
                     fill="#ef4444" 
                     stroke="#ffffff" 
                     strokeWidth={2 / stageScale}

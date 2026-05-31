@@ -22,12 +22,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   
   const containerRef = useRef<HTMLDivElement>(null);
-  
-  // ★追加：キャンバスを直接操作して処理落ちを無くすための「ダイレクト操作」用パーツ
-  const stageRef = useRef<any>(null);
-  const lastDist = useRef<number>(0);
-  const lastCenter = useRef<{x: number, y: number} | null>(null);
-  const isPinching = useRef<boolean>(false);
 
   useEffect(() => {
     const updateSize = () => {
@@ -57,10 +51,9 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     }
   };
 
+  // ★変更：Konva標準の安全なタップ判定を使用
   const handleStageClick = (e: any) => {
     if (e.target.className === 'Circle' || e.target.parent?.className === 'Transformer') return;
-    // 誤タップ防止
-    if (isPinching.current) return;
     
     const stage = e.target.getStage();
     const pointerPos = stage.getPointerPosition();
@@ -78,6 +71,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     }
   };
 
+  // PCのマウスホイール用ズーム（そのまま残しています）
   const handleWheel = (e: any) => {
     e.evt.preventDefault();
     const scaleBy = 1.1; 
@@ -100,90 +94,28 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     });
   };
 
-  // ★変更：処理落ちゼロの「ダイレクト操作」モード
-  const handleTouchMove = (e: any) => {
-    e.evt.preventDefault();
-    const touch1 = e.evt.touches[0];
-    const touch2 = e.evt.touches[1];
+  // ★追加：＋ーボタン用のズーム機能（画面の中心に向かって拡大縮小する）
+  const handleZoom = (direction: 1 | -1) => {
+    const scaleBy = 1.2;
+    const oldScale = stageScale;
+    const newScale = direction === 1 ? oldScale * scaleBy : oldScale / scaleBy;
+    const limitedScale = Math.max(0.1, Math.min(newScale, 10));
 
-    if (touch1 && touch2) {
-      isPinching.current = true;
-      const stage = stageRef.current;
-      if (!stage) return;
+    const center = {
+      x: dimensions.width / 2,
+      y: dimensions.height / 2,
+    };
 
-      // 2本指の時は、誤ってドラッグ移動しないように一旦止める
-      if (stage.isDragging()) {
-        stage.stopDrag();
-      }
+    const mousePointTo = {
+      x: (center.x - stagePos.x) / oldScale,
+      y: (center.y - stagePos.y) / oldScale,
+    };
 
-      const p1 = { x: touch1.clientX, y: touch1.clientY };
-      const p2 = { x: touch2.clientX, y: touch2.clientY };
-
-      const getCenter = (p1: any, p2: any) => ({
-        x: (p1.x + p2.x) / 2,
-        y: (p1.y + p2.y) / 2,
-      });
-
-      const newCenter = getCenter(p1, p2);
-      const dist = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
-
-      if (!lastCenter.current) {
-        lastCenter.current = newCenter;
-        return;
-      }
-
-      if (!lastDist.current) {
-        lastDist.current = dist;
-      }
-
-      const stageBox = stage.container().getBoundingClientRect();
-      
-      const pointTo = {
-        x: (newCenter.x - stageBox.left - stage.x()) / stage.scaleX(),
-        y: (newCenter.y - stageBox.top - stage.y()) / stage.scaleX(),
-      };
-
-      const scaleBy = dist / lastDist.current;
-      let newScale = stage.scaleX() * scaleBy;
-      newScale = Math.max(0.1, Math.min(newScale, 10));
-
-      // Reactを無視して、キャンバスの画像を直接拡大縮小する（爆速）
-      stage.scaleX(newScale);
-      stage.scaleY(newScale);
-
-      const dx = newCenter.x - lastCenter.current.x;
-      const dy = newCenter.y - lastCenter.current.y;
-
-      const newPos = {
-        x: newCenter.x - stageBox.left - pointTo.x * newScale + dx,
-        y: newCenter.y - stageBox.top - pointTo.y * newScale + dy,
-      };
-
-      stage.position(newPos);
-      stage.batchDraw();
-
-      lastDist.current = dist;
-      lastCenter.current = newCenter;
-    }
-  };
-
-  const handleTouchEndStage = (e: any) => {
-    lastDist.current = 0;
-    lastCenter.current = null;
-
-    if (isPinching.current) {
-      // ピンチ操作が終わった時だけ、現在の位置をReactに記憶させる
-      if (stageRef.current) {
-        setStageScale(stageRef.current.scaleX());
-        setStagePos(stageRef.current.position());
-      }
-      // 0.1秒後にピンチ判定を解除（誤タップ防止）
-      setTimeout(() => { isPinching.current = false; }, 100);
-      return;
-    }
-
-    // 1本指のタップだった場合のみ、点を打つ処理へ
-    handleStageClick(e);
+    setStageScale(limitedScale);
+    setStagePos({
+      x: center.x - mousePointTo.x * limitedScale,
+      y: center.y - mousePointTo.y * limitedScale,
+    });
   };
 
   const handleNextStep = () => {
@@ -264,6 +196,24 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
         ref={containerRef}
         className="border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-200 flex-grow shadow-inner relative cursor-crosshair touch-none"
       >
+        {/* ★追加：右上の＋ー拡大縮小ボタン */}
+        {step !== 'done' && (
+          <div className="absolute top-2 right-2 flex flex-col gap-2 z-10">
+            <button 
+              onClick={() => handleZoom(1)} 
+              className="w-12 h-12 bg-white/90 border border-gray-300 rounded-lg shadow-md flex items-center justify-center text-2xl font-bold text-gray-700 hover:bg-gray-100 touch-manipulation"
+            >
+              ＋
+            </button>
+            <button 
+              onClick={() => handleZoom(-1)} 
+              className="w-12 h-12 bg-white/90 border border-gray-300 rounded-lg shadow-md flex items-center justify-center text-2xl font-bold text-gray-700 hover:bg-gray-100 touch-manipulation"
+            >
+              －
+            </button>
+          </div>
+        )}
+
         {step === 'done' && placedPanels.length > 0 && (
           <div className="absolute top-2 left-2 bg-white/90 p-2 rounded text-xs font-bold text-amber-900 z-10 border border-amber-200 pointer-events-none">
             設置イメージ表示中 ({placedPanels.length} 枚)
@@ -272,19 +222,17 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
         
         {step !== 'done' && (
            <div className="absolute bottom-2 right-2 bg-white/90 p-2 rounded text-[10px] text-gray-600 z-10 pointer-events-none border border-gray-300 shadow-sm">
-             🖱 ホイール / 2本指: 拡大・縮小<br/>
+             🖱 右上ボタン: 拡大・縮小<br/>
              👆 1本指ドラッグ: 画像を移動<br/>
              🎯 点をドラッグ: 位置の微調整
            </div>
         )}
 
         <Stage 
-          ref={stageRef}                     // ★追加：ダイレクト操作の紐付け
           width={dimensions.width} 
           height={dimensions.height} 
           onClick={handleStageClick} 
-          onTouchMove={handleTouchMove}      
-          onTouchEnd={handleTouchEndStage}   
+          onTap={handleStageClick} // ★Konva標準の安定したスマホ用タップ判定
           onWheel={handleWheel} 
           scaleX={stageScale}   
           scaleY={stageScale}

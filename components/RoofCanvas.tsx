@@ -11,7 +11,9 @@ interface RoofCanvasProps {
 
 export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanvasProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [image] = useImage(imageUrl || '');
+  
+  // ★重要：iPad（Safari）のセキュリティブロックを解除するために crossOrigin を指定
+  const [image] = useImage(imageUrl || '', 'anonymous');
   
   const [step, setStep] = useState<'upload' | 'reference' | 'area' | 'done'>('upload');
   const [refPoints, setRefPoints] = useState<number[]>([]);
@@ -221,7 +223,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
                     fill="#dc2626" 
                     opacity={refOpacity}
                     draggable={step === 'reference'}
-                    // ★追加：基準線ステップの時だけ当たり判定を有効にする
                     listening={step === 'reference'} 
                     onDragMove={(e) => {
                       const newPts = [...refPoints];
@@ -250,7 +251,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
                     stroke="#ffffff" 
                     strokeWidth={2 / stageScale}
                     draggable={step === 'area'}
-                    // ★追加：エリア指定ステップの時だけ当たり判定を有効にする
                     listening={step === 'area'}
                     onDragMove={(e) => {
                       const newPts = [...areaPoints];
@@ -269,4 +269,3 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels }: RoofCanv
     </div>
   );
 }
-// === ⬇️ コピーはここまで ⬇️ ===

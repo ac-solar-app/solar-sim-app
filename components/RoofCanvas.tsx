@@ -7,7 +7,7 @@ import useImage from 'use-image';
 interface RoofCanvasProps {
   onPointsConfirmed: (refLine: number[], areaPoints: number[]) => void;
   placedPanels: Array<number[]>; 
-  simulateTrigger?: number; // ★追加：シミュレーション実行ボタンが押された回数を受け取る
+  simulateTrigger?: number; 
 }
 
 export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTrigger }: RoofCanvasProps) {
@@ -38,7 +38,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
     return () => window.removeEventListener('resize', updateSize);
   }, [imageUrl]);
 
-  // ★追加：画像をキャンバス全体にぴったり収める（原寸に戻す）処理を共通化
   const fitImageToStage = useCallback(() => {
     if (image && containerRef.current) {
       const containerWidth = containerRef.current.offsetWidth;
@@ -58,12 +57,10 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
     }
   }, [image]);
 
-  // 画像が読み込まれた時、または画面サイズが変わった時に全体表示する
   useEffect(() => {
     fitImageToStage();
   }, [fitImageToStage, dimensions]);
 
-  // ★追加：親から「シミュレーション実行」の合図（simulateTrigger）が来たら、全体表示に戻す
   useEffect(() => {
     if (simulateTrigger && simulateTrigger > 0) {
       fitImageToStage();
@@ -178,7 +175,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
     setStageScale(1);
     setStagePos({ x: 0, y: 0 });
     onPointsConfirmed([], []);
-    fitImageToStage(); // やり直し時も全体表示に戻す
+    fitImageToStage(); 
   };
 
   if (!imageUrl) {
@@ -193,7 +190,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
     );
   }
 
-  const refOpacity = step === 'reference' ? 1 : 0.4;
+  const refOpacity = step === 'reference' ? 1 : 0.6;
 
   return (
     <div className="w-full h-full flex flex-col overflow-hidden">
@@ -201,14 +198,16 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
         <div className="flex items-center space-x-2">
           {step === 'reference' && <p className="text-sm font-bold text-red-600 animate-pulse">【Step 1】屋根の「軒」に沿って、2点をタップし基準線を引いてください</p>}
           {step === 'area' && <p className="text-sm font-bold text-blue-600 animate-pulse">【Step 2】屋根の角をタップして、エリアを囲んでください</p>}
-          {step === 'done' && <p className="text-sm font-medium text-gray-600">エリア指定完了</p>}
+          {/* ★修正：完了後も微調整できることを明記 */}
+          {step === 'done' && <p className="text-sm font-medium text-gray-600">エリア指定完了 (点をドラッグで微調整できます)</p>}
         </div>
         <div className="space-x-2 flex">
           {step === 'reference' && refPoints.length === 4 && (
             <button onClick={handleNextStep} className="px-4 py-2 bg-red-600 text-white font-bold rounded-md text-sm shadow-sm">次へ (エリア指定)</button>
           )}
+          {/* ★修正：ボタン表記を「レイアウト範囲指定」に変更 */}
           {step === 'area' && areaPoints.length >= 6 && (
-            <button onClick={handleNextStep} className="px-4 py-2 bg-blue-600 text-white font-bold rounded-md text-sm shadow-sm">決定 (閉じる)</button>
+            <button onClick={handleNextStep} className="px-4 py-2 bg-blue-600 text-white font-bold rounded-md text-sm shadow-sm">レイアウト範囲指定</button>
           )}
           
           {step !== 'done' && (
@@ -250,8 +249,8 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
         
         <div className="absolute bottom-2 right-2 bg-white/90 p-2 rounded text-[10px] text-gray-600 z-10 pointer-events-none border border-gray-300 shadow-sm overflow-hidden">
           🖱 右上ボタン: 拡大・縮小<br/>
-          👆 1本指ドラッグ: 画像を移動
-          {step !== 'done' && <><br/>🎯 点をドラッグ: 位置の微調整</>}
+          👆 1本指ドラッグ: 画像を移動<br/>
+          🎯 点をドラッグ: 位置の微調整
         </div>
 
         <Stage 
@@ -285,7 +284,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
             ))}
 
             {refPoints.length > 0 && (
-              // ★修正：線の太さを倍の「6」に（ズームしても太さが一定になるように調整）
               <Line points={refPoints} stroke="#dc2626" strokeWidth={6 / stageScale} dash={[10 / stageScale, 5 / stageScale]} opacity={refOpacity} />
             )}
             {refPoints.map((_, index) => {
@@ -295,17 +293,26 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
                     key={`ref-${index}`} 
                     x={refPoints[index]} 
                     y={refPoints[index + 1]} 
-                    // ★修正：点の大きさを半分の「7.5」に
                     radius={7.5 / stageScale} 
                     fill="#dc2626" 
                     opacity={refOpacity}
-                    draggable={step === 'reference'}
-                    listening={step === 'reference'} 
+                    // ★修正：完了(done)後もドラッグ操作を許可する
+                    draggable={step === 'reference' || step === 'done'}
+                    listening={step === 'reference' || step === 'done'} 
                     onDragMove={(e) => {
                       const newPts = [...refPoints];
                       newPts[index] = e.target.x();
                       newPts[index + 1] = e.target.y();
                       setRefPoints(newPts);
+                    }}
+                    // ★追加：ドラッグ終了時に、完了状態であれば親へ最新の点を送って更新する
+                    onDragEnd={(e) => {
+                      if (step === 'done') {
+                        const newPts = [...refPoints];
+                        newPts[index] = e.target.x();
+                        newPts[index + 1] = e.target.y();
+                        onPointsConfirmed(newPts, areaPoints);
+                      }
                     }}
                   />
                 );
@@ -314,7 +321,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
             })}
 
             {areaPoints.length > 0 && (
-              // ★修正：青い線の太さも倍の「6」に
               <Line points={areaPoints} fill="rgba(59, 130, 246, 0.3)" stroke="#3b82f6" strokeWidth={6 / stageScale} closed={step === 'done'} />
             )}
             {areaPoints.map((_, index) => {
@@ -324,18 +330,27 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
                     key={`area-${index}`} 
                     x={areaPoints[index]} 
                     y={areaPoints[index + 1]} 
-                    // ★修正：青い点の大きさも半分の「7.5」に
                     radius={7.5 / stageScale} 
                     fill="#ef4444" 
                     stroke="#ffffff" 
                     strokeWidth={2 / stageScale}
-                    draggable={step === 'area'}
-                    listening={step === 'area'}
+                    // ★修正：完了(done)後もドラッグ操作を許可する
+                    draggable={step === 'area' || step === 'done'}
+                    listening={step === 'area' || step === 'done'}
                     onDragMove={(e) => {
                       const newPts = [...areaPoints];
                       newPts[index] = e.target.x();
                       newPts[index + 1] = e.target.y();
                       setAreaPoints(newPts);
+                    }}
+                    // ★追加：ドラッグ終了時に、完了状態であれば親へ最新の点を送って更新する
+                    onDragEnd={(e) => {
+                      if (step === 'done') {
+                        const newPts = [...areaPoints];
+                        newPts[index] = e.target.x();
+                        newPts[index + 1] = e.target.y();
+                        onPointsConfirmed(refPoints, newPts);
+                      }
                     }}
                   />
                 );

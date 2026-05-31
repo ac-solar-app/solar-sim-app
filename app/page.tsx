@@ -2,29 +2,13 @@
 
 import dynamic from 'next/dynamic';
 import { useState, useEffect } from 'react';
+// ★追加：さっき作ったデータベースとの通信パイプを読み込む
+import { supabase } from '../lib/supabase'; 
 
 const RoofCanvas = dynamic(() => import('@/components/RoofCanvas'), {
   ssr: false,
   loading: () => <div className="flex h-full items-center justify-center bg-gray-100 animate-pulse">Loading Canvas...</div>
 });
-
-const PANEL_DATA = {
-  "長州産業": [
-    { id: "cs-340b61", name: "Premium Blue (340W) 1670×1000", width: 1.67, height: 1.00, kw: 0.34 },
-    { id: "cs-285b61", name: "Premium Blue 小型 (285W) 1300×1000", width: 1.30, height: 1.00, kw: 0.285 }
-  ],
-  "Qセルズ": [
-    { id: "q-peak-400", name: "Q.PEAK DUO-G9 (400W) 1673×1030", width: 1.673, height: 1.03, kw: 0.40 },
-    { id: "q-peak-355", name: "Q.PEAK DUO-G9 小型 (355W) 1700×1000", width: 1.70, height: 1.00, kw: 0.355 }
-  ],
-  "パナソニック": [
-    { id: "hit-250", name: "HIT P250α Plus (250W) 1580×798", width: 1.58, height: 0.798, kw: 0.25 },
-    { id: "hit-120", name: "HIT ハーフ (120W) 790×798", width: 0.79, height: 0.798, kw: 0.12 }
-  ],
-  "カナディアン・ソーラー": [
-    { id: "cs3l-375", name: "HiKu (375W) 1765×1048", width: 1.765, height: 1.048, kw: 0.375 }
-  ]
-};
 
 const pointToSegmentDist = (px: number, py: number, ax: number, ay: number, bx: number, by: number) => {
   const l2 = (bx - ax)**2 + (by - ay)**2;
@@ -66,8 +50,12 @@ export default function Home() {
   const [roofPitch, setRoofPitch] = useState<number>(5.5); 
   const [panelMarginMm, setPanelMarginMm] = useState<number>(500); 
 
-  const [maker, setMaker] = useState<string>("長州産業");
-  const [panelId, setPanelId] = useState<string>("cs-340b61");
+  // ★追加：データベースから取得したパネル情報を保存する場所
+  const [panelData, setPanelData] = useState<Record<string, any[]>>({});
+  const [isLoadingDb, setIsLoadingDb] = useState<boolean>(true);
+
+  const [maker, setMaker] = useState<string>("");
+  const [panelId, setPanelId] = useState<string>("");
   
   const [zipCode, setZipCode] = useState<string>("");
   const [locationInfo, setLocationInfo] = useState({ address: "", station: "" });
@@ -82,13 +70,47 @@ export default function Home() {
 
   const [previewPanels, setPreviewPanels] = useState<{x: number, y: number}[]>([]);
   const [readyPanelsPx, setReadyPanelsPx] = useState<Array<number[]>>([]);
-
-  // ★追加：シミュレーション実行のタイミングをキャンバスに伝えるトリガー
   const [simulateTrigger, setSimulateTrigger] = useState<number>(0);
 
+  // ★追加：画面が開いた瞬間にSupabaseからデータを取得する処理
   useEffect(() => {
-    setPanelId(PANEL_DATA[maker as keyof typeof PANEL_DATA][0].id);
-  }, [maker]);
+    const fetchPanels = async () => {
+      try {
+        // panelsテーブルから全データを取得
+        const { data, error } = await supabase.from('panels').select('*');
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          // 取得したデータを「メーカー名」ごとにグループ分けする
+          const grouped: Record<string, any[]> = {};
+          data.forEach(p => {
+            if (!grouped[p.maker]) grouped[p.maker] = [];
+            grouped[p.maker].push(p);
+          });
+          
+          setPanelData(grouped);
+          
+          // 最初のメーカーとパネルを初期選択状態にする
+          const firstMaker = Object.keys(grouped)[0];
+          setMaker(firstMaker);
+          setPanelId(grouped[firstMaker][0].id);
+        }
+      } catch (error) {
+        console.error("データベースの読み込みエラー:", error);
+      } finally {
+        setIsLoadingDb(false);
+      }
+    };
+
+    fetchPanels();
+  }, []);
+
+  // ★変更：メーカーが変わった時の自動選択処理（データ読込後のみ動く）
+  useEffect(() => {
+    if (!isLoadingDb && maker && panelData[maker]) {
+      setPanelId(panelData[maker][0].id);
+    }
+  }, [maker, isLoadingDb, panelData]);
 
   const validatePanel = (px: number, py: number, pW: number, pH: number, margin: number, poly: {x: number, y: number}[]) => {
     const corners = [
@@ -143,6 +165,9 @@ export default function Home() {
   }, [zipCode]);
 
   useEffect(() => {
+    // データベース読込前や、選択されたパネルがない場合は計算をスキップ
+    if (isLoadingDb || !maker || !panelData[maker]) return;
+
     if (refLine.length === 4 && areaPoints.length >= 6) {
       const dx = refLine[2] - refLine[0];
       const dy = refLine[3] - refLine[1];
@@ -175,9 +200,13 @@ export default function Home() {
       const wSpan = maxX - minX;
       const hSpan = maxY - minY;
 
-      const selectedPanel = PANEL_DATA[maker as keyof typeof PANEL_DATA].find(p => p.id === panelId) || PANEL_DATA["長州産業"][0];
-      const panelW = selectedPanel.width; 
-      const panelH = selectedPanel.height; 
+      // ★変更：データベースから取得したパネル情報を参照する
+      const makerPanels = panelData[maker] || [];
+      const selectedPanel = makerPanels.find(p => p.id === panelId) || makerPanels[0];
+      if (!selectedPanel) return;
+
+      const panelW = Number(selectedPanel.width); 
+      const panelH = Number(selectedPanel.height); 
       const marginM = panelMarginMm / 1000; 
 
       let bestLayout: {x: number, y: number}[] = [];
@@ -226,7 +255,7 @@ export default function Home() {
       setPreviewPanels([]);
       setReadyPanelsPx([]);
     }
-  }, [refLine, areaPoints, calibLength, roofPitch, maker, panelId, panelMarginMm]);
+  }, [refLine, areaPoints, calibLength, roofPitch, maker, panelId, panelMarginMm, panelData, isLoadingDb]);
 
   const handlePointsConfirmed = (ref: number[], area: number[]) => {
     setRefLine(ref);
@@ -243,8 +272,12 @@ export default function Home() {
       return;
     }
 
-    const selectedPanel = PANEL_DATA[maker as keyof typeof PANEL_DATA].find(p => p.id === panelId) || PANEL_DATA["長州産業"][0];
-    const panelKw = selectedPanel.kw; 
+    // ★変更：データベースから取得したパネルのkW数を参照する
+    const makerPanels = panelData[maker] || [];
+    const selectedPanel = makerPanels.find(p => p.id === panelId) || makerPanels[0];
+    if (!selectedPanel) return;
+
+    const panelKw = Number(selectedPanel.kw); 
     const capacity = previewPanels.length * panelKw;
     
     setResultCount(previewPanels.length);
@@ -265,7 +298,6 @@ export default function Home() {
     setMonthlyGen(monthlyData);
     setAnnualGen(Math.round(totalAnn));
 
-    // ★追加：シミュレーション実行ボタンが押されたらトリガーを更新し、キャンバスを原寸に戻す
     setSimulateTrigger(prev => prev + 1);
   };
 
@@ -280,7 +312,7 @@ export default function Home() {
           <RoofCanvas 
             onPointsConfirmed={handlePointsConfirmed} 
             placedPanels={placedPanelsCoords}
-            simulateTrigger={simulateTrigger} // ★キャンバスにトリガーを渡す
+            simulateTrigger={simulateTrigger} 
           />
         </div>
       </section>
@@ -320,46 +352,53 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="space-y-2.5">
-              <div>
-                <label className="text-[10px] text-gray-500 block mb-0.5">メーカー</label>
-                <select 
-                  value={maker}
-                  onChange={(e) => setMaker(e.target.value)}
-                  className="border p-2 rounded-md w-full bg-white text-xs font-medium"
-                >
-                  {Object.keys(PANEL_DATA).map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
+            {/* ★変更：データベース読み込み中はローディングを表示する */}
+            {isLoadingDb ? (
+              <div className="flex justify-center items-center py-6 text-xs text-blue-600 font-bold animate-pulse">
+                ☁️ クラウドからパネルデータを読み込み中...
               </div>
-              <div>
-                <label className="text-[10px] text-gray-500 block mb-0.5">型番 (寸法・出力)</label>
-                <select 
-                  value={panelId}
-                  onChange={(e) => setPanelId(e.target.value)}
-                  className="border p-2 rounded-md w-full bg-white text-xs font-medium"
-                >
-                  {PANEL_DATA[maker as keyof typeof PANEL_DATA].map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex items-center justify-between pt-2 border-t border-gray-200">
-                <span className="text-xs text-gray-600 font-bold">離隔幅 (屋根端からの隙間):</span>
-                <div className="flex items-center space-x-1">
-                  <input 
-                    type="number" 
-                    value={panelMarginMm}
-                    onChange={(e) => setPanelMarginMm(Number(e.target.value))}
-                    className="border p-1 rounded w-20 text-right text-xs bg-white font-medium"
-                    min={0}
-                    step={100}
-                  />
-                  <span className="text-xs text-gray-600">mm</span>
+            ) : (
+              <div className="space-y-2.5">
+                <div>
+                  <label className="text-[10px] text-gray-500 block mb-0.5">メーカー</label>
+                  <select 
+                    value={maker}
+                    onChange={(e) => setMaker(e.target.value)}
+                    className="border p-2 rounded-md w-full bg-white text-xs font-medium"
+                  >
+                    {Object.keys(panelData).map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 block mb-0.5">型番 (寸法・出力)</label>
+                  <select 
+                    value={panelId}
+                    onChange={(e) => setPanelId(e.target.value)}
+                    className="border p-2 rounded-md w-full bg-white text-xs font-medium"
+                  >
+                    {panelData[maker]?.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+                  <span className="text-xs text-gray-600 font-bold">離隔幅 (屋根端からの隙間):</span>
+                  <div className="flex items-center space-x-1">
+                    <input 
+                      type="number" 
+                      value={panelMarginMm}
+                      onChange={(e) => setPanelMarginMm(Number(e.target.value))}
+                      className="border p-1 rounded w-20 text-right text-xs bg-white font-medium"
+                      min={0}
+                      step={100}
+                    />
+                    <span className="text-xs text-gray-600">mm</span>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
           <div className="p-3 bg-green-50 rounded-lg border border-green-100">
@@ -402,7 +441,8 @@ export default function Home() {
         <div className="mt-6 border-t border-gray-200 pt-4 flex-grow flex flex-col justify-end">
           <button 
             onClick={handleSimulate}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-md text-sm mb-4"
+            disabled={isLoadingDb}
+            className={`w-full text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-md text-sm mb-4 ${isLoadingDb ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
           >
             シミュレーション実行
           </button>

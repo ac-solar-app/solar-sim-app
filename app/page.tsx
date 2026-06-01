@@ -2,7 +2,6 @@
 
 import dynamic from 'next/dynamic';
 import { useState, useEffect } from 'react';
-// ★データベースとの通信パイプ
 import { supabase } from '../lib/supabase'; 
 
 const RoofCanvas = dynamic(() => import('@/components/RoofCanvas'), {
@@ -42,29 +41,38 @@ const doSegmentsIntersect = (p1: {x:number, y:number}, p2: {x:number, y:number},
           ((cp3 > 0 && cp4 < 0) || (cp3 < 0 && cp4 > 0)));
 };
 
+// ➕【追加】2つのGPS座標間の直線距離(km)を計算する関数
+const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const R = 6371; // 地球の半径(km)
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+};
+
 export default function Home() {
   const [refLine, setRefLine] = useState<number[]>([]);
   const [areaPoints, setAreaPoints] = useState<number[]>([]);
-  
   const [calibLength, setCalibLength] = useState<number>(10);
   const [roofPitch, setRoofPitch] = useState<number>(5.5); 
   const [panelMarginMm, setPanelMarginMm] = useState<number>(500); 
 
-  // ★パネル情報用
   const [panelData, setPanelData] = useState<Record<string, any[]>>({});
   const [isLoadingDb, setIsLoadingDb] = useState<boolean>(true);
 
   const [maker, setMaker] = useState<string>("");
   const [panelId, setPanelId] = useState<string>("");
   
-  // ➕【追加】全国150拠点のNEDO日射量データを保存する箱
   const [solarDataList, setSolarDataList] = useState<any[]>([]);
   const [zipCode, setZipCode] = useState<string>("");
   const [address, setAddress] = useState<string>("");
   const [matchedStation, setMatchedStation] = useState<any>(null);
+  const [isSearchingGPS, setIsSearchingGPS] = useState<boolean>(false);
 
   const [azimuth, setAzimuth] = useState<number>(1.0); 
-  
   const [resultCount, setResultCount] = useState<number>(0);
   const [resultCapacity, setResultCapacity] = useState<string>("0.00");
   const [placedPanelsCoords, setPlacedPanelsCoords] = useState<Array<number[]>>([]);
@@ -76,11 +84,9 @@ export default function Home() {
   const [readyPanelsPx, setReadyPanelsPx] = useState<Array<number[]>>([]);
   const [simulateTrigger, setSimulateTrigger] = useState<number>(0);
 
-  // ★画面が開いた瞬間にSupabaseからデータをまとめて取得する処理（パネルデータ＆150拠点日射量データ）
   useEffect(() => {
     const fetchInitialMasterData = async () => {
       try {
-        // ① パネルデータの取得
         const { data: pData, error: pError } = await supabase.from('panels').select('*');
         if (pError) throw pError;
 
@@ -91,30 +97,24 @@ export default function Home() {
             bundled[p.maker].push(p);
           });
           setPanelData(bundled);
-          
           const firstMaker = Object.keys(bundled)[0];
           setMaker(firstMaker);
           setPanelId(bundled[firstMaker][0].id);
         }
 
-        // ➕【追加】② 全国150拠点のNEDO気象データの取得
         const { data: sData, error: sError } = await supabase.from('solar_data').select('*');
         if (sError) throw sError;
-        if (sData) {
-          setSolarDataList(sData);
-        }
+        if (sData) setSolarDataList(sData);
 
       } catch (error) {
-        console.error("データベース初期読み込みエラー:", error);
+        console.error("DB読み込みエラー:", error);
       } finally {
         setIsLoadingDb(false);
       }
     };
-
     fetchInitialMasterData();
   }, []);
 
-  // ★メーカー変更時の型番自動選択処理
   useEffect(() => {
     if (!isLoadingDb && maker && panelData[maker]) {
       setPanelId(panelData[maker][0].id);
@@ -154,26 +154,61 @@ export default function Home() {
     return true;
   };
 
-  // ➕【追加】住所テキスト（手入力、または郵便番号から自動生成された住所）から最適なNEDO都市を150拠点から特定する
-  const findBestSolarStation = (addressText: string) => {
-    if (!addressText || solarDataList.length === 0) return null;
+  // ➕【追加】GPS座標から最も近い気象台を特定する処理
+  const findClosestStation = (lat: number, lon: number) => {
+    if (solarDataList.length === 0) return null;
+    let closest = solarDataList[0];
+    let minDistance = Infinity;
 
-    // まず都道府県名が一致する拠点（数拠点）に絞り込む
-    const prefGroup = solarDataList.filter(row => addressText.includes(row.pref));
-    if (prefGroup.length === 0) return null;
-
-    // その都道府県の拠点の中で、都市名（station）が住所テキストの中に含まれているか判定（例：「会津若松市」なら「若松」が一致）
-    const exactMatch = prefGroup.find(row => addressText.includes(row.station));
-    
-    // 都市名レベルで部分一致がなければ、その都道府県の1番目の都市（代表拠点）をデフォルトとして適用
-    return exactMatch || prefGroup[0];
+    for (const station of solarDataList) {
+      if (station.lat && station.lon) {
+        const dist = calculateDistance(lat, lon, Number(station.lat), Number(station.lon));
+        if (dist < minDistance) {
+          minDistance = dist;
+          closest = station;
+        }
+      }
+    }
+    return closest;
   };
 
-  // ➕【追加】郵便番号入力時の自動処理（無料の外部住所検索APIを叩く）
+  // 万が一国土地理院がダウンしていた場合の古い文字マッチング（保険）
+  const fallbackStringMatch = (text: string) => {
+    const prefGroup = solarDataList.filter(row => text.includes(row.pref));
+    if (prefGroup.length === 0) return null;
+    return prefGroup.find(row => text.includes(row.station)) || prefGroup[0];
+  };
+
+  // ➕【追加】住所テキストを国土地理院APIに投げてGPS座標を取得し、最近接ステーションをセットする
+  const executeGPSMatch = async (addressText: string) => {
+    if (!addressText) return;
+    setIsSearchingGPS(true);
+    try {
+      // 国土地理院の住所検索APIを呼び出し
+      const res = await fetch(`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(addressText)}`);
+      const data = await res.json();
+      
+      if (data && data.length > 0) {
+        // APIから返ってきた緯度経度を取得
+        const lon = data[0].geometry.coordinates[0];
+        const lat = data[0].geometry.coordinates[1];
+        
+        // 距離計算をして一番近い拠点をセット！
+        const bestStation = findClosestStation(lat, lon);
+        setMatchedStation(bestStation);
+      } else {
+        setMatchedStation(fallbackStringMatch(addressText));
+      }
+    } catch (e) {
+      setMatchedStation(fallbackStringMatch(addressText));
+    } finally {
+      setIsSearchingGPS(false);
+    }
+  };
+
   const handleZipCodeChange = async (val: string) => {
     setZipCode(val);
     const cleanZip = val.replace("-", "").trim();
-    
     if (cleanZip.length === 7) {
       try {
         const res = await fetch(`https://zipcloud.ibsnet.co.jp/api/search?zipcode=${cleanZip}`);
@@ -181,23 +216,14 @@ export default function Home() {
         if (json.results && json.results.length > 0) {
           const resObj = json.results[0];
           const fullAddress = resObj.address1 + resObj.address2 + resObj.address3;
-          setAddress(fullAddress); // 住所入力欄にも自動セット
-          
-          // 即座に日射量観測所を特定してセット
-          const bestStation = findBestSolarStation(fullAddress);
-          setMatchedStation(bestStation);
+          setAddress(fullAddress); 
+          // 住所が分かったら即座にGPS特定を実行
+          await executeGPSMatch(fullAddress);
         }
       } catch (e) {
-        console.error("郵便番号からの住所検索に失敗しました:", e);
+        console.error(e);
       }
     }
-  };
-
-  // ➕【追加】住所を手動で書き換えたときの処理
-  const handleAddressChange = (val: string) => {
-    setAddress(val);
-    const bestStation = findBestSolarStation(val);
-    setMatchedStation(bestStation);
   };
 
   useEffect(() => {
@@ -317,8 +343,6 @@ export default function Home() {
     setResultCapacity(capacity.toFixed(2));
     setPlacedPanelsCoords(readyPanelsPx);
 
-    // ★変更：ダミー配列をやめて、特定された150拠点のリアルなNEDO日射量データをセットする
-    // 万が一拠点が特定されていない場合は、安全のために標準的なダミー値をフォールバックにします
     const targetRadiation = matchedStation ? [
       Number(matchedStation.m1), Number(matchedStation.m2), Number(matchedStation.m3), Number(matchedStation.m4),
       Number(matchedStation.m5), Number(matchedStation.m6), Number(matchedStation.m7), Number(matchedStation.m8),
@@ -337,13 +361,11 @@ export default function Home() {
 
     setMonthlyGen(monthlyData);
     setAnnualGen(Math.round(totalAnn));
-
     setSimulateTrigger(prev => prev + 1);
   };
 
   return (
     <main className="flex h-[100dvh] w-full bg-gray-50 text-gray-800 font-sans overflow-hidden">
-      
       <section className="flex-grow p-4 flex flex-col overflow-hidden h-full">
         <header className="mb-2 flex-none">
           <h1 className="text-xl font-bold text-gray-900">Solar Sim Pro</h1>
@@ -359,15 +381,13 @@ export default function Home() {
 
       <aside className="w-[450px] bg-white border-l border-gray-200 shadow-sm p-5 flex flex-col overflow-y-auto h-full flex-none">
         <h2 className="text-base font-semibold mb-4 border-b pb-1">シミュレーション設定</h2>
-        
         <div className="space-y-4">
           
           <div className="p-3 bg-red-50 rounded-lg border border-red-100">
             <h3 className="text-xs font-bold text-red-800 mb-2">1. 基準線の実測長</h3>
             <div className="flex items-center space-x-2">
               <input 
-                type="number" 
-                value={calibLength}
+                type="number" value={calibLength}
                 onChange={(e) => setCalibLength(Number(e.target.value))}
                 className="border p-2 rounded-md w-full text-right bg-white text-sm font-medium"
               />
@@ -381,12 +401,9 @@ export default function Home() {
               <div className="flex items-center space-x-1">
                 <span className="text-xs text-gray-600">傾斜:</span>
                 <input 
-                  type="number" 
-                  value={roofPitch}
+                  type="number" value={roofPitch}
                   onChange={(e) => setRoofPitch(Number(e.target.value))}
-                  className="border p-1 rounded w-14 text-right text-xs bg-white font-medium"
-                  step={0.5}
-                  min={0}
+                  className="border p-1 rounded w-14 text-right text-xs bg-white font-medium" step={0.5} min={0}
                 />
                 <span className="text-xs text-gray-700">寸</span>
               </div>
@@ -401,37 +418,28 @@ export default function Home() {
                 <div>
                   <label className="text-[10px] text-gray-500 block mb-0.5">メーカー</label>
                   <select 
-                    value={maker}
-                    onChange={(e) => setMaker(e.target.value)}
+                    value={maker} onChange={(e) => setMaker(e.target.value)}
                     className="border p-2 rounded-md w-full bg-white text-xs font-medium"
                   >
-                    {Object.keys(panelData).map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
+                    {Object.keys(panelData).map((m) => (<option key={m} value={m}>{m}</option>))}
                   </select>
                 </div>
                 <div>
                   <label className="text-[10px] text-gray-500 block mb-0.5">型番 (寸法・出力)</label>
                   <select 
-                    value={panelId}
-                    onChange={(e) => setPanelId(e.target.value)}
+                    value={panelId} onChange={(e) => setPanelId(e.target.value)}
                     className="border p-2 rounded-md w-full bg-white text-xs font-medium"
                   >
-                    {panelData[maker]?.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
+                    {panelData[maker]?.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
                   </select>
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-gray-200">
                   <span className="text-xs text-gray-600 font-bold">離隔幅 (屋根端からの隙間):</span>
                   <div className="flex items-center space-x-1">
                     <input 
-                      type="number" 
-                      value={panelMarginMm}
+                      type="number" value={panelMarginMm}
                       onChange={(e) => setPanelMarginMm(Number(e.target.value))}
-                      className="border p-1 rounded w-20 text-right text-xs bg-white font-medium"
-                      min={0}
-                      step={100}
+                      className="border p-1 rounded w-20 text-right text-xs bg-white font-medium" min={0} step={100}
                     />
                     <span className="text-xs text-gray-600">mm</span>
                   </div>
@@ -440,7 +448,6 @@ export default function Home() {
             )}
           </div>
 
-          {/* ★変更：ダブル入力対応のインテリジェンス地域入力エリア */}
           <div className="p-3 bg-green-50 rounded-lg border border-green-100">
             <h3 className="text-xs font-bold text-green-800 mb-2">3. 環境データ (NEDO日射量自動連動)</h3>
             <div className="space-y-2.5">
@@ -448,41 +455,40 @@ export default function Home() {
                 <div className="col-span-1">
                   <label className="text-[10px] text-gray-500 block mb-0.5">郵便番号</label>
                   <input 
-                    type="text" 
-                    placeholder="981-0000"
-                    value={zipCode}
+                    type="text" placeholder="981-0000" value={zipCode}
                     onChange={(e) => handleZipCodeChange(e.target.value)}
                     className="border p-2 rounded-md w-full text-xs bg-white font-medium"
                   />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-[10px] text-gray-500 block mb-0.5">住所（手入力・自動検索共通）</label>
+                  <label className="text-[10px] text-gray-500 block mb-0.5">住所（手入力は枠外タップで検索）</label>
                   <input 
-                    type="text" 
-                    placeholder="例: 宮城県白石市 / 福島県会津若松市"
-                    value={address}
-                    onChange={(e) => handleAddressChange(e.target.value)}
+                    type="text" placeholder="例: 宮城県登米市" value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    onBlur={() => executeGPSMatch(address)}
                     className="border p-2 rounded-md w-full text-xs bg-white font-medium"
                   />
                 </div>
               </div>
 
-              {/* ➕【追加】現在、150拠点のうちどれが判定されて適用されているかをリアルタイムバッジ表示 */}
-              {matchedStation ? (
+              {isSearchingGPS ? (
+                <div className="text-[10px] text-blue-600 bg-blue-50 p-2 rounded border border-blue-200 shadow-sm font-semibold animate-pulse">
+                  🛰️ 国土地理院APIと通信中... GPS座標から最短の気象台を検索しています...
+                </div>
+              ) : matchedStation ? (
                 <div className="text-[10px] text-green-700 bg-white p-2 rounded border border-green-200 shadow-sm font-semibold">
-                  ☀️ NEDO気象台自動連動：<span className="text-blue-700 font-bold">【{matchedStation.pref} / {matchedStation.station}】</span>のリアルな気象データを計算に適用しています！
+                  🎯 GPS最寄り判定：<span className="text-blue-700 font-bold">【{matchedStation.pref} / {matchedStation.station}】</span>のデータを計算に適用中！
                 </div>
               ) : (
                 <div className="text-[10px] text-amber-700 bg-amber-50 p-2 rounded border border-amber-200 shadow-sm">
-                  💡 郵便番号(7桁)を入力するか、住所を入力すると自動で最も近いNEDOの観測拠点を特定します。
+                  💡 郵便番号か住所を入力すると、地図上の直線距離から最寄りの気象台を自動で探し出します。
                 </div>
               )}
 
               <div className="flex items-center justify-between pt-1">
                 <span className="text-xs text-gray-600 font-bold">屋根の方位:</span>
                 <select 
-                  value={azimuth}
-                  onChange={(e) => setAzimuth(Number(e.target.value))}
+                  value={azimuth} onChange={(e) => setAzimuth(Number(e.target.value))}
                   className="border p-1.5 rounded-md w-28 bg-white text-xs font-medium"
                 >
                   <option value={1.0}>南</option>
@@ -499,8 +505,7 @@ export default function Home() {
 
         <div className="mt-6 border-t border-gray-200 pt-4 flex-grow flex flex-col justify-end">
           <button 
-            onClick={handleSimulate}
-            disabled={isLoadingDb}
+            onClick={handleSimulate} disabled={isLoadingDb}
             className={`w-full text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-md text-sm mb-4 ${isLoadingDb ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
           >
             シミュレーション実行

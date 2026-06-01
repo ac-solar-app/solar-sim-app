@@ -371,10 +371,12 @@ export default function Home() {
           <h1 className="text-xl font-bold text-gray-900">Solar Sim Pro</h1>
         </header>
         <div className="flex-grow border border-gray-300 rounded-md bg-white shadow-sm overflow-hidden relative min-h-0">
+          {/* ★ここで calibLength をキャンバスに渡しています */}
           <RoofCanvas 
             onPointsConfirmed={handlePointsConfirmed} 
             placedPanels={placedPanelsCoords}
             simulateTrigger={simulateTrigger} 
+            calibLength={calibLength}
           />
         </div>
       </section>

@@ -87,7 +87,7 @@ export default function Home() {
   useEffect(() => {
     const fetchInitialMasterData = async () => {
       try {
-        const { data: pData, error: pError } = await supabase.from('panels').select('*');
+        const { data: pData, error: pError } = await supabase.from('panels').select('*').order('kw', { ascending: false });
         if (pError) throw pError;
 
         if (pData && pData.length > 0) {

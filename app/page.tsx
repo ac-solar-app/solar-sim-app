@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { useState, useEffect } from 'react';
-// ★追加：さっき作ったデータベースとの通信パイプを読み込む
+// ★データベースとの通信パイプ
 import { supabase } from '../lib/supabase'; 
 
 const RoofCanvas = dynamic(() => import('@/components/RoofCanvas'), {
@@ -50,15 +50,19 @@ export default function Home() {
   const [roofPitch, setRoofPitch] = useState<number>(5.5); 
   const [panelMarginMm, setPanelMarginMm] = useState<number>(500); 
 
-  // ★追加：データベースから取得したパネル情報を保存する場所
+  // ★パネル情報用
   const [panelData, setPanelData] = useState<Record<string, any[]>>({});
   const [isLoadingDb, setIsLoadingDb] = useState<boolean>(true);
 
   const [maker, setMaker] = useState<string>("");
   const [panelId, setPanelId] = useState<string>("");
   
+  // ➕【追加】全国150拠点のNEDO日射量データを保存する箱
+  const [solarDataList, setSolarDataList] = useState<any[]>([]);
   const [zipCode, setZipCode] = useState<string>("");
-  const [locationInfo, setLocationInfo] = useState({ address: "", station: "" });
+  const [address, setAddress] = useState<string>("");
+  const [matchedStation, setMatchedStation] = useState<any>(null);
+
   const [azimuth, setAzimuth] = useState<number>(1.0); 
   
   const [resultCount, setResultCount] = useState<number>(0);
@@ -72,40 +76,45 @@ export default function Home() {
   const [readyPanelsPx, setReadyPanelsPx] = useState<Array<number[]>>([]);
   const [simulateTrigger, setSimulateTrigger] = useState<number>(0);
 
-  // ★追加：画面が開いた瞬間にSupabaseからデータを取得する処理
+  // ★画面が開いた瞬間にSupabaseからデータをまとめて取得する処理（パネルデータ＆150拠点日射量データ）
   useEffect(() => {
-    const fetchPanels = async () => {
+    const fetchInitialMasterData = async () => {
       try {
-        // panelsテーブルから全データを取得
-        const { data, error } = await supabase.from('panels').select('*');
-        if (error) throw error;
+        // ① パネルデータの取得
+        const { data: pData, error: pError } = await supabase.from('panels').select('*');
+        if (pError) throw pError;
 
-        if (data && data.length > 0) {
-          // 取得したデータを「メーカー名」ごとにグループ分けする
-          const grouped: Record<string, any[]> = {};
-          data.forEach(p => {
-            if (!grouped[p.maker]) grouped[p.maker] = [];
-            grouped[p.maker].push(p);
+        if (pData && pData.length > 0) {
+          const bundled: Record<string, any[]> = {};
+          pData.forEach(p => {
+            if (!bundled[p.maker]) bundled[p.maker] = [];
+            bundled[p.maker].push(p);
           });
+          setPanelData(bundled);
           
-          setPanelData(grouped);
-          
-          // 最初のメーカーとパネルを初期選択状態にする
-          const firstMaker = Object.keys(grouped)[0];
+          const firstMaker = Object.keys(bundled)[0];
           setMaker(firstMaker);
-          setPanelId(grouped[firstMaker][0].id);
+          setPanelId(bundled[firstMaker][0].id);
         }
+
+        // ➕【追加】② 全国150拠点のNEDO気象データの取得
+        const { data: sData, error: sError } = await supabase.from('solar_data').select('*');
+        if (sError) throw sError;
+        if (sData) {
+          setSolarDataList(sData);
+        }
+
       } catch (error) {
-        console.error("データベースの読み込みエラー:", error);
+        console.error("データベース初期読み込みエラー:", error);
       } finally {
         setIsLoadingDb(false);
       }
     };
 
-    fetchPanels();
+    fetchInitialMasterData();
   }, []);
 
-  // ★変更：メーカーが変わった時の自動選択処理（データ読込後のみ動く）
+  // ★メーカー変更時の型番自動選択処理
   useEffect(() => {
     if (!isLoadingDb && maker && panelData[maker]) {
       setPanelId(panelData[maker][0].id);
@@ -145,27 +154,53 @@ export default function Home() {
     return true;
   };
 
-  useEffect(() => {
-    const cleanZip = zipCode.replace("-", "").trim();
-    if (cleanZip.length >= 7) {
-      if (cleanZip === "9800003") {
-        setLocationInfo({ address: "宮城県仙台市青葉区中央", station: "仙台（アメダス観測所）" });
-      } else if (cleanZip.startsWith("100")) {
-        setLocationInfo({ address: "東京都千代田区大手町", station: "東京（千代田区）" });
-      } else if (cleanZip.startsWith("360")) {
-        setLocationInfo({ address: "埼玉県熊谷市桜木町", station: "熊谷（熊谷気象台）" });
-      } else if (cleanZip.startsWith("060")) {
-        setLocationInfo({ address: "北海道札幌市中央区北1条", station: "札幌（管区気象台）" });
-      } else {
-        setLocationInfo({ address: "検索された住所（サンプル）", station: "最寄りの地域気象観測所" });
+  // ➕【追加】住所テキスト（手入力、または郵便番号から自動生成された住所）から最適なNEDO都市を150拠点から特定する
+  const findBestSolarStation = (addressText: string) => {
+    if (!addressText || solarDataList.length === 0) return null;
+
+    // まず都道府県名が一致する拠点（数拠点）に絞り込む
+    const prefGroup = solarDataList.filter(row => addressText.includes(row.pref));
+    if (prefGroup.length === 0) return null;
+
+    // その都道府県の拠点の中で、都市名（station）が住所テキストの中に含まれているか判定（例：「会津若松市」なら「若松」が一致）
+    const exactMatch = prefGroup.find(row => addressText.includes(row.station));
+    
+    // 都市名レベルで部分一致がなければ、その都道府県の1番目の都市（代表拠点）をデフォルトとして適用
+    return exactMatch || prefGroup[0];
+  };
+
+  // ➕【追加】郵便番号入力時の自動処理（無料の外部住所検索APIを叩く）
+  const handleZipCodeChange = async (val: string) => {
+    setZipCode(val);
+    const cleanZip = val.replace("-", "").trim();
+    
+    if (cleanZip.length === 7) {
+      try {
+        const res = await fetch(`https://zipcloud.ibsnet.co.jp/api/search?zipcode=${cleanZip}`);
+        const json = await res.json();
+        if (json.results && json.results.length > 0) {
+          const resObj = json.results[0];
+          const fullAddress = resObj.address1 + resObj.address2 + resObj.address3;
+          setAddress(fullAddress); // 住所入力欄にも自動セット
+          
+          // 即座に日射量観測所を特定してセット
+          const bestStation = findBestSolarStation(fullAddress);
+          setMatchedStation(bestStation);
+        }
+      } catch (e) {
+        console.error("郵便番号からの住所検索に失敗しました:", e);
       }
-    } else {
-      setLocationInfo({ address: "", station: "" });
     }
-  }, [zipCode]);
+  };
+
+  // ➕【追加】住所を手動で書き換えたときの処理
+  const handleAddressChange = (val: string) => {
+    setAddress(val);
+    const bestStation = findBestSolarStation(val);
+    setMatchedStation(bestStation);
+  };
 
   useEffect(() => {
-    // データベース読込前や、選択されたパネルがない場合は計算をスキップ
     if (isLoadingDb || !maker || !panelData[maker]) return;
 
     if (refLine.length === 4 && areaPoints.length >= 6) {
@@ -200,7 +235,6 @@ export default function Home() {
       const wSpan = maxX - minX;
       const hSpan = maxY - minY;
 
-      // ★変更：データベースから取得したパネル情報を参照する
       const makerPanels = panelData[maker] || [];
       const selectedPanel = makerPanels.find(p => p.id === panelId) || makerPanels[0];
       if (!selectedPanel) return;
@@ -272,7 +306,6 @@ export default function Home() {
       return;
     }
 
-    // ★変更：データベースから取得したパネルのkW数を参照する
     const makerPanels = panelData[maker] || [];
     const selectedPanel = makerPanels.find(p => p.id === panelId) || makerPanels[0];
     if (!selectedPanel) return;
@@ -284,12 +317,19 @@ export default function Home() {
     setResultCapacity(capacity.toFixed(2));
     setPlacedPanelsCoords(readyPanelsPx);
 
-    const mockNedoSolarRad = [2.5, 3.2, 3.8, 4.5, 4.8, 4.2, 4.5, 4.8, 3.7, 3.0, 2.6, 2.3];
+    // ★変更：ダミー配列をやめて、特定された150拠点のリアルなNEDO日射量データをセットする
+    // 万が一拠点が特定されていない場合は、安全のために標準的なダミー値をフォールバックにします
+    const targetRadiation = matchedStation ? [
+      Number(matchedStation.m1), Number(matchedStation.m2), Number(matchedStation.m3), Number(matchedStation.m4),
+      Number(matchedStation.m5), Number(matchedStation.m6), Number(matchedStation.m7), Number(matchedStation.m8),
+      Number(matchedStation.m9), Number(matchedStation.m10), Number(matchedStation.m11), Number(matchedStation.m12)
+    ] : [2.5, 3.2, 3.8, 4.5, 4.8, 4.2, 4.5, 4.8, 3.7, 3.0, 2.6, 2.3];
+
     const lossFactor = 0.8; 
     const daysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
     let totalAnn = 0;
-    const monthlyData = mockNedoSolarRad.map((rad, index) => {
+    const monthlyData = targetRadiation.map((rad, index) => {
       const gen = capacity * rad * lossFactor * azimuth * daysInMonth[index];
       totalAnn += gen;
       return Math.round(gen);
@@ -352,7 +392,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* ★変更：データベース読み込み中はローディングを表示する */}
             {isLoadingDb ? (
               <div className="flex justify-center items-center py-6 text-xs text-blue-600 font-bold animate-pulse">
                 ☁️ クラウドからパネルデータを読み込み中...
@@ -401,24 +440,44 @@ export default function Home() {
             )}
           </div>
 
+          {/* ★変更：ダブル入力対応のインテリジェンス地域入力エリア */}
           <div className="p-3 bg-green-50 rounded-lg border border-green-100">
-            <h3 className="text-xs font-bold text-green-800 mb-2">3. 環境データ (日射量用)</h3>
+            <h3 className="text-xs font-bold text-green-800 mb-2">3. 環境データ (NEDO日射量自動連動)</h3>
             <div className="space-y-2.5">
-              <div>
-                <label className="text-[10px] text-gray-500 block mb-0.5">郵便番号</label>
-                <input 
-                  type="text" 
-                  placeholder="例: 980-0003"
-                  value={zipCode}
-                  onChange={(e) => setZipCode(e.target.value)}
-                  className="border p-2 rounded-md w-full text-xs bg-white font-medium"
-                />
-                {locationInfo.address && (
-                  <div className="text-[10px] text-gray-700 bg-white p-1.5 rounded border border-green-200 mt-1 shadow-sm">
-                    📍 {locationInfo.address}
-                  </div>
-                )}
+              <div className="grid grid-cols-3 gap-2">
+                <div className="col-span-1">
+                  <label className="text-[10px] text-gray-500 block mb-0.5">郵便番号</label>
+                  <input 
+                    type="text" 
+                    placeholder="981-0000"
+                    value={zipCode}
+                    onChange={(e) => handleZipCodeChange(e.target.value)}
+                    className="border p-2 rounded-md w-full text-xs bg-white font-medium"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] text-gray-500 block mb-0.5">住所（手入力・自動検索共通）</label>
+                  <input 
+                    type="text" 
+                    placeholder="例: 宮城県白石市 / 福島県会津若松市"
+                    value={address}
+                    onChange={(e) => handleAddressChange(e.target.value)}
+                    className="border p-2 rounded-md w-full text-xs bg-white font-medium"
+                  />
+                </div>
               </div>
+
+              {/* ➕【追加】現在、150拠点のうちどれが判定されて適用されているかをリアルタイムバッジ表示 */}
+              {matchedStation ? (
+                <div className="text-[10px] text-green-700 bg-white p-2 rounded border border-green-200 shadow-sm font-semibold">
+                  ☀️ NEDO気象台自動連動：<span className="text-blue-700 font-bold">【{matchedStation.pref} / {matchedStation.station}】</span>のリアルな気象データを計算に適用しています！
+                </div>
+              ) : (
+                <div className="text-[10px] text-amber-700 bg-amber-50 p-2 rounded border border-amber-200 shadow-sm">
+                  💡 郵便番号(7桁)を入力するか、住所を入力すると自動で最も近いNEDOの観測拠点を特定します。
+                </div>
+              )}
+
               <div className="flex items-center justify-between pt-1">
                 <span className="text-xs text-gray-600 font-bold">屋根の方位:</span>
                 <select 
@@ -459,9 +518,9 @@ export default function Home() {
 
               {annualGen > 0 && (
                 <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm text-xs">
-                  {locationInfo.station && (
-                    <div className="mb-2 p-1.5 bg-green-50 border border-green-100 rounded text-[10px] text-gray-600">
-                      📡 <strong>NEDO観測地点:</strong> {locationInfo.station}
+                  {matchedStation && (
+                    <div className="mb-2 p-1.5 bg-green-50 border border-green-100 rounded text-[10px] text-gray-600 font-medium">
+                      📡 <strong>適用中のデータソース:</strong> NEDO気象台（{matchedStation.pref} - {matchedStation.station}）
                     </div>
                   )}
                   <div className="flex justify-between items-end mb-2 border-b pb-1">

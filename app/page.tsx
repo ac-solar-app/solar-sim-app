@@ -59,7 +59,6 @@ export default function Home() {
   const [roofPitch, setRoofPitch] = useState<number>(5.5); 
   const [panelMarginMm, setPanelMarginMm] = useState<number>(500); 
 
-  // ★追加：電気代単価（初期値は35円）
   const [electricityRate, setElectricityRate] = useState<number>(35);
 
   const [panelData, setPanelData] = useState<Record<string, any[]>>({});
@@ -496,7 +495,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* ★追加：経済効果の単価設定欄 */}
           <div className="p-3 bg-yellow-50 rounded-lg border border-yellow-200">
             <h3 className="text-xs font-bold text-yellow-800 mb-2">4. 経済効果（電気代削減）</h3>
             <div className="flex items-center justify-between">
@@ -532,16 +530,6 @@ export default function Home() {
                 <p className="text-xs text-gray-600 font-medium mt-0.5">設置枚数: {resultCount} 枚</p>
               </div>
 
-              {/* ★追加：金額のドカンと表示！ */}
-              {annualGen > 0 && (
-                <div className="bg-yellow-100 border border-yellow-300 rounded-lg p-3 shadow-md text-center">
-                  <p className="text-[11px] text-yellow-800 font-bold mb-0.5">年間想定削減額（目安）</p>
-                  <p className="text-2xl font-extrabold text-yellow-900">
-                    {Math.round(annualGen * electricityRate).toLocaleString()} <span className="text-sm font-normal">円/年</span>
-                  </p>
-                </div>
-              )}
-
               {annualGen > 0 && (
                 <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm text-xs">
                   {matchedStation && (
@@ -572,9 +560,19 @@ export default function Home() {
                       ))}
                     </div>
                   </div>
-                  
                 </div>
               )}
+
+              {/* ★移動：月別予測発電量の下に配置しました */}
+              {annualGen > 0 && (
+                <div className="bg-yellow-100 border border-yellow-300 rounded-lg p-3 shadow-md text-center">
+                  <p className="text-[11px] text-yellow-800 font-bold mb-0.5">年間想定削減額（目安）</p>
+                  <p className="text-2xl font-extrabold text-yellow-900">
+                    {Math.round(annualGen * electricityRate).toLocaleString()} <span className="text-sm font-normal">円/年</span>
+                  </p>
+                </div>
+              )}
+              
             </div>
           )}
         </div>

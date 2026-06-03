@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-// ★追加：文字を描画するための「Text」を読み込み
 import { Stage, Layer, Image as KonvaImage, Line, Circle, Text } from 'react-konva';
 import useImage from 'use-image';
 
@@ -9,11 +8,13 @@ interface RoofCanvasProps {
   onPointsConfirmed: (refLine: number[], areaPoints: number[]) => void;
   placedPanels: Array<number[]>; 
   simulateTrigger?: number; 
-  // ★追加：親画面から「基準線の長さ(m)」を受け取るための設定
   calibLength?: number; 
+  // ★追加：パネルのON/OFF状態と、クリックされた時の合図を送る機能
+  activePanels?: boolean[];
+  onTogglePanel?: (index: number) => void;
 }
 
-export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTrigger, calibLength = 10 }: RoofCanvasProps) {
+export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTrigger, calibLength = 10, activePanels, onTogglePanel }: RoofCanvasProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [image] = useImage(imageUrl || '');
   
@@ -194,10 +195,11 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
   }
 
   const refOpacity = step === 'reference' ? 1 : 0.6;
-
-  // ★追加：ピクセルをメートルに変換するための「縮尺計算」
   const refPxLength = refPoints.length >= 4 ? Math.hypot(refPoints[2] - refPoints[0], refPoints[3] - refPoints[1]) : 0;
   const pxToMeter = refPxLength > 0 ? calibLength / refPxLength : 0;
+
+  // アクティブなパネルの枚数を数える
+  const activeCount = activePanels ? activePanels.filter(v => v).length : placedPanels.length;
 
   return (
     <div className="w-full h-full flex flex-col overflow-hidden">
@@ -205,7 +207,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
         <div className="flex items-center space-x-2">
           {step === 'reference' && <p className="text-sm font-bold text-red-600 animate-pulse">【Step 1】屋根の「軒」に沿って、2点をタップし基準線を引いてください</p>}
           {step === 'area' && <p className="text-sm font-bold text-blue-600 animate-pulse">【Step 2】屋根の角をタップして、エリアを囲んでください</p>}
-          {step === 'done' && <p className="text-sm font-medium text-gray-600">エリア指定完了 (点をドラッグで微調整できます)</p>}
+          {step === 'done' && <p className="text-sm font-medium text-gray-600">エリア指定完了 (パネルをタップで除外/追加できます)</p>}
         </div>
         <div className="space-x-2 flex">
           {step === 'reference' && refPoints.length === 4 && (
@@ -248,14 +250,14 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
 
         {step === 'done' && placedPanels.length > 0 && (
           <div className="absolute top-2 left-2 bg-white/90 p-2 rounded text-xs font-bold text-amber-900 z-10 border border-amber-200 pointer-events-none">
-            設置イメージ表示中 ({placedPanels.length} 枚)
+            設置イメージ表示中 (有効: {activeCount} 枚)
           </div>
         )}
         
         <div className="absolute bottom-2 right-2 bg-white/90 p-2 rounded text-[10px] text-gray-600 z-10 pointer-events-none border border-gray-300 shadow-sm overflow-hidden">
           🖱 右上ボタン: 拡大・縮小<br/>
           👆 1本指ドラッグ: 画像を移動<br/>
-          🎯 点をドラッグ: 位置の微調整
+          🎯 パネルをタップ: ON/OFF切替
         </div>
 
         <Stage 
@@ -284,11 +286,39 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
                />
             )}
             
-            {step === 'done' && placedPanels.map((pts, index) => (
-              <Line key={`panel-${index}`} points={pts} closed={true} fill="rgba(251, 191, 36, 0.6)" stroke="#f59e0b" strokeWidth={1 / stageScale} />
-            ))}
+            {/* ★修正：パネルの描画（クリック検知とグレーアウト化） */}
+            {step === 'done' && placedPanels.map((pts, index) => {
+              const isActive = activePanels && activePanels.length > index ? activePanels[index] : true;
+              return (
+                <Line 
+                  key={`panel-${index}`} 
+                  points={pts} 
+                  closed={true} 
+                  // ONなら黄色、OFFなら薄いグレー
+                  fill={isActive ? "rgba(251, 191, 36, 0.6)" : "rgba(156, 163, 175, 0.4)"} 
+                  stroke={isActive ? "#f59e0b" : "#9ca3af"} 
+                  strokeWidth={1 / stageScale} 
+                  listening={step === 'done'}
+                  onClick={(e) => {
+                    e.cancelBubble = true; // 屋根エリアのクリック判定を防ぐ
+                    if (onTogglePanel) onTogglePanel(index);
+                  }}
+                  onTap={(e) => {
+                    e.cancelBubble = true;
+                    if (onTogglePanel) onTogglePanel(index);
+                  }}
+                  onMouseEnter={(e) => {
+                    const container = e.target.getStage()?.container();
+                    if (container) container.style.cursor = 'pointer';
+                  }}
+                  onMouseLeave={(e) => {
+                    const container = e.target.getStage()?.container();
+                    if (container) container.style.cursor = 'crosshair';
+                  }}
+                />
+              );
+            })}
 
-            {/* ★基準線の描画と長さ表示 */}
             {refPoints.length > 0 && (
               <Line points={refPoints} stroke="#dc2626" strokeWidth={6 / stageScale} dash={[10 / stageScale, 5 / stageScale]} opacity={refOpacity} />
             )}
@@ -298,8 +328,8 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
                 y={(refPoints[1] + refPoints[3]) / 2}
                 text={`基準線: ${calibLength}m`}
                 fontSize={16 / stageScale}
-                fill="#b91c1c" // 濃い赤
-                stroke="#ffffff" // 白フチで読みやすく
+                fill="#b91c1c"
+                stroke="#ffffff"
                 strokeWidth={4 / stageScale}
                 fillAfterStrokeEnabled={true}
                 fontStyle="bold"
@@ -341,7 +371,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
               return null;
             })}
 
-            {/* ★エリア枠線の描画と長さ表示 */}
             {areaPoints.length > 0 && (
               <Line points={areaPoints} fill="rgba(59, 130, 246, 0.3)" stroke="#3b82f6" strokeWidth={6 / stageScale} closed={step === 'done'} />
             )}
@@ -349,7 +378,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
               const labels = [];
               for (let i = 0; i < areaPoints.length; i += 2) {
                 const isLast = i === areaPoints.length - 2;
-                if (isLast && step !== 'done') continue; // まだ閉じていない最後の線は表示しない
+                if (isLast && step !== 'done') continue;
 
                 const nextI = isLast ? 0 : i + 2;
                 const x1 = areaPoints[i];
@@ -358,7 +387,7 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
                 const y2 = areaPoints[nextI+1];
 
                 const lenPx = Math.hypot(x2 - x1, y2 - y1);
-                const lenM = (lenPx * pxToMeter).toFixed(1); // 小数点第1位までに丸める
+                const lenM = (lenPx * pxToMeter).toFixed(1);
 
                 labels.push(
                   <Text
@@ -367,8 +396,8 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
                     y={(y1 + y2) / 2}
                     text={`${lenM}m`}
                     fontSize={15 / stageScale}
-                    fill="#1d4ed8" // 濃い青
-                    stroke="#ffffff" // 白フチ
+                    fill="#1d4ed8"
+                    stroke="#ffffff"
                     strokeWidth={4 / stageScale}
                     fillAfterStrokeEnabled={true}
                     fontStyle="bold"

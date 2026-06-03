@@ -41,9 +41,8 @@ const doSegmentsIntersect = (p1: {x:number, y:number}, p2: {x:number, y:number},
           ((cp3 > 0 && cp4 < 0) || (cp3 < 0 && cp4 > 0)));
 };
 
-// ➕【追加】2つのGPS座標間の直線距離(km)を計算する関数
 const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-  const R = 6371; // 地球の半径(km)
+  const R = 6371; 
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
@@ -59,6 +58,9 @@ export default function Home() {
   const [calibLength, setCalibLength] = useState<number>(10);
   const [roofPitch, setRoofPitch] = useState<number>(5.5); 
   const [panelMarginMm, setPanelMarginMm] = useState<number>(500); 
+
+  // ★追加：電気代単価（初期値は35円）
+  const [electricityRate, setElectricityRate] = useState<number>(35);
 
   const [panelData, setPanelData] = useState<Record<string, any[]>>({});
   const [isLoadingDb, setIsLoadingDb] = useState<boolean>(true);
@@ -154,7 +156,6 @@ export default function Home() {
     return true;
   };
 
-  // ➕【追加】GPS座標から最も近い気象台を特定する処理
   const findClosestStation = (lat: number, lon: number) => {
     if (solarDataList.length === 0) return null;
     let closest = solarDataList[0];
@@ -172,28 +173,22 @@ export default function Home() {
     return closest;
   };
 
-  // 万が一国土地理院がダウンしていた場合の古い文字マッチング（保険）
   const fallbackStringMatch = (text: string) => {
     const prefGroup = solarDataList.filter(row => text.includes(row.pref));
     if (prefGroup.length === 0) return null;
     return prefGroup.find(row => text.includes(row.station)) || prefGroup[0];
   };
 
-  // ➕【追加】住所テキストを国土地理院APIに投げてGPS座標を取得し、最近接ステーションをセットする
   const executeGPSMatch = async (addressText: string) => {
     if (!addressText) return;
     setIsSearchingGPS(true);
     try {
-      // 国土地理院の住所検索APIを呼び出し
       const res = await fetch(`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(addressText)}`);
       const data = await res.json();
       
       if (data && data.length > 0) {
-        // APIから返ってきた緯度経度を取得
         const lon = data[0].geometry.coordinates[0];
         const lat = data[0].geometry.coordinates[1];
-        
-        // 距離計算をして一番近い拠点をセット！
         const bestStation = findClosestStation(lat, lon);
         setMatchedStation(bestStation);
       } else {
@@ -217,7 +212,6 @@ export default function Home() {
           const resObj = json.results[0];
           const fullAddress = resObj.address1 + resObj.address2 + resObj.address3;
           setAddress(fullAddress); 
-          // 住所が分かったら即座にGPS特定を実行
           await executeGPSMatch(fullAddress);
         }
       } catch (e) {
@@ -371,7 +365,6 @@ export default function Home() {
           <h1 className="text-xl font-bold text-gray-900">Solar Sim Pro</h1>
         </header>
         <div className="flex-grow border border-gray-300 rounded-md bg-white shadow-sm overflow-hidden relative min-h-0">
-          {/* ★ここで calibLength をキャンバスに渡しています */}
           <RoofCanvas 
             onPointsConfirmed={handlePointsConfirmed} 
             placedPanels={placedPanelsCoords}
@@ -503,6 +496,22 @@ export default function Home() {
             </div>
           </div>
 
+          {/* ★追加：経済効果の単価設定欄 */}
+          <div className="p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+            <h3 className="text-xs font-bold text-yellow-800 mb-2">4. 経済効果（電気代削減）</h3>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-700 font-bold">電気代単価:</span>
+              <div className="flex items-center space-x-1">
+                <input 
+                  type="number" value={electricityRate}
+                  onChange={(e) => setElectricityRate(Number(e.target.value))}
+                  className="border p-1.5 rounded w-20 text-right text-xs bg-white font-medium shadow-sm" step={1} min={10}
+                />
+                <span className="text-xs text-gray-700">円/kWh</span>
+              </div>
+            </div>
+          </div>
+
         </div>
 
         <div className="mt-6 border-t border-gray-200 pt-4 flex-grow flex flex-col justify-end">
@@ -522,6 +531,16 @@ export default function Home() {
                 </p>
                 <p className="text-xs text-gray-600 font-medium mt-0.5">設置枚数: {resultCount} 枚</p>
               </div>
+
+              {/* ★追加：金額のドカンと表示！ */}
+              {annualGen > 0 && (
+                <div className="bg-yellow-100 border border-yellow-300 rounded-lg p-3 shadow-md text-center">
+                  <p className="text-[11px] text-yellow-800 font-bold mb-0.5">年間想定削減額（目安）</p>
+                  <p className="text-2xl font-extrabold text-yellow-900">
+                    {Math.round(annualGen * electricityRate).toLocaleString()} <span className="text-sm font-normal">円/年</span>
+                  </p>
+                </div>
+              )}
 
               {annualGen > 0 && (
                 <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm text-xs">

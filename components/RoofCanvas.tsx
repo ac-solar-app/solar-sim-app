@@ -9,7 +9,6 @@ interface RoofCanvasProps {
   placedPanels: Array<number[]>; 
   simulateTrigger?: number; 
   calibLength?: number; 
-  // ★追加：パネルのON/OFF状態と、クリックされた時の合図を送る機能
   activePanels?: boolean[];
   onTogglePanel?: (index: number) => void;
 }
@@ -198,7 +197,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
   const refPxLength = refPoints.length >= 4 ? Math.hypot(refPoints[2] - refPoints[0], refPoints[3] - refPoints[1]) : 0;
   const pxToMeter = refPxLength > 0 ? calibLength / refPxLength : 0;
 
-  // アクティブなパネルの枚数を数える
   const activeCount = activePanels ? activePanels.filter(v => v).length : placedPanels.length;
 
   return (
@@ -286,7 +284,12 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
                />
             )}
             
-            {/* ★修正：パネルの描画（クリック検知とグレーアウト化） */}
+            {/* ★大修正：青いフィルム（エリア）をパネルよりも「先」に描画して奥に敷く */}
+            {areaPoints.length > 0 && (
+              <Line points={areaPoints} fill="rgba(59, 130, 246, 0.3)" stroke="#3b82f6" strokeWidth={6 / stageScale} closed={step === 'done'} />
+            )}
+            
+            {/* ★パネルをその「上」に重ねる（これでクリックが邪魔されない！） */}
             {step === 'done' && placedPanels.map((pts, index) => {
               const isActive = activePanels && activePanels.length > index ? activePanels[index] : true;
               return (
@@ -294,13 +297,12 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
                   key={`panel-${index}`} 
                   points={pts} 
                   closed={true} 
-                  // ONなら黄色、OFFなら薄いグレー
                   fill={isActive ? "rgba(251, 191, 36, 0.6)" : "rgba(156, 163, 175, 0.4)"} 
                   stroke={isActive ? "#f59e0b" : "#9ca3af"} 
                   strokeWidth={1 / stageScale} 
                   listening={step === 'done'}
                   onClick={(e) => {
-                    e.cancelBubble = true; // 屋根エリアのクリック判定を防ぐ
+                    e.cancelBubble = true; 
                     if (onTogglePanel) onTogglePanel(index);
                   }}
                   onTap={(e) => {
@@ -371,9 +373,6 @@ export default function RoofCanvas({ onPointsConfirmed, placedPanels, simulateTr
               return null;
             })}
 
-            {areaPoints.length > 0 && (
-              <Line points={areaPoints} fill="rgba(59, 130, 246, 0.3)" stroke="#3b82f6" strokeWidth={6 / stageScale} closed={step === 'done'} />
-            )}
             {areaPoints.length >= 4 && pxToMeter > 0 && (() => {
               const labels = [];
               for (let i = 0; i < areaPoints.length; i += 2) {

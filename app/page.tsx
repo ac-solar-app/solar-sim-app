@@ -84,7 +84,6 @@ export default function Home() {
   const [readyPanelsPx, setReadyPanelsPx] = useState<Array<number[]>>([]);
   const [simulateTrigger, setSimulateTrigger] = useState<number>(0);
 
-  // ★追加：個々のパネルが「ON」か「OFF」かを記憶するリスト
   const [activePanels, setActivePanels] = useState<boolean[]>([]);
 
   useEffect(() => {
@@ -123,6 +122,40 @@ export default function Home() {
       setPanelId(panelData[maker][0].id);
     }
   }, [maker, isLoadingDb, panelData]);
+
+  // ★復旧：これが消えていました！！！
+  const validatePanel = (px: number, py: number, pW: number, pH: number, margin: number, poly: {x: number, y: number}[]) => {
+    const corners = [
+      {x: px, y: py}, {x: px + pW, y: py}, 
+      {x: px + pW, y: py + pH}, {x: px, y: py + pH}
+    ];
+    for (const c of corners) {
+      if (!isInsidePolygon(c.x, c.y, poly)) return false;
+    }
+    for (let i = 0; i < 4; i++) {
+      const p1 = corners[i];
+      const p2 = corners[(i + 1) % 4];
+      for (let j = 0, k = poly.length - 1; j < poly.length; k = j++) {
+        const q1 = poly[k];
+        const q2 = poly[j];
+        if (doSegmentsIntersect(p1, p2, q1, q2)) return false;
+      }
+    }
+    if (margin > 0) {
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const ax = poly[j].x, ay = poly[j].y;
+        const bx = poly[i].x, by = poly[i].y;
+        for (const c of corners) {
+          if (pointToSegmentDist(c.x, c.y, ax, ay, bx, by) < margin) return false;
+        }
+        const cx = Math.max(Math.min(ax, px + pW), px);
+        const cy = Math.max(Math.min(ay, py + pH), py);
+        const distToRect = Math.hypot(ax - cx, ay - cy);
+        if (distToRect < margin) return false;
+      }
+    }
+    return true;
+  };
 
   const findClosestStation = (lat: number, lon: number) => {
     if (solarDataList.length === 0) return null;
@@ -273,7 +306,6 @@ export default function Home() {
       });
       setReadyPanelsPx(finalPanelsPx);
       
-      // ★追加：屋根を描き直した時は、すべてのパネルを「ON（true）」に初期化する
       setActivePanels(new Array(finalPanelsPx.length).fill(true));
 
     } else {
@@ -293,7 +325,6 @@ export default function Home() {
     setActivePanels([]);
   };
 
-  // ★追加：ON/OFF状態をもとに、発電量や金額を「再計算」する専用エンジン
   const recalculateResults = (currentActive: boolean[]) => {
     if (previewPanels.length === 0) return;
 
@@ -302,7 +333,7 @@ export default function Home() {
     if (!selectedPanel) return;
 
     const panelKw = Number(selectedPanel.kw); 
-    const activeCount = currentActive.filter(v => v).length; // ONの枚数だけ数える
+    const activeCount = currentActive.filter(v => v).length; 
     const capacity = activeCount * panelKw;
     
     setResultCount(activeCount);
@@ -340,17 +371,15 @@ export default function Home() {
       return;
     }
     setPlacedPanelsCoords(readyPanelsPx);
-    recalculateResults(activePanels); // ★再計算エンジンを呼び出す
+    recalculateResults(activePanels); 
     setSimulateTrigger(prev => prev + 1);
   };
 
-  // ★追加：キャンバスから「パネルがクリックされたよ！」と報告を受け取る窓口
   const handleTogglePanel = (index: number) => {
     const newActive = [...activePanels];
-    newActive[index] = !newActive[index]; // ONとOFFをひっくり返す
+    newActive[index] = !newActive[index]; 
     setActivePanels(newActive);
 
-    // シミュレーション実行済みなら、クリックした瞬間に右側の数字も即座に更新する
     if (resultCount > 0 || resultCapacity !== "0.00") {
       recalculateResults(newActive);
     }
@@ -368,7 +397,6 @@ export default function Home() {
             placedPanels={placedPanelsCoords}
             simulateTrigger={simulateTrigger} 
             calibLength={calibLength}
-            // ★キャンバスにON/OFFのデータと窓口を渡す
             activePanels={activePanels}
             onTogglePanel={handleTogglePanel}
           />

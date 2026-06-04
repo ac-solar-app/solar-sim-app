@@ -41,28 +41,71 @@ const doSegmentsIntersect = (p1: {x:number, y:number}, p2: {x:number, y:number},
           ((cp3 > 0 && cp4 < 0) || (cp3 < 0 && cp4 > 0)));
 };
 
+const validatePanel = (px: number, py: number, pW: number, pH: number, margin: number, poly: {x: number, y: number}[]) => {
+  const corners = [ {x: px, y: py}, {x: px + pW, y: py}, {x: px + pW, y: py + pH}, {x: px, y: py + pH} ];
+  for (const c of corners) {
+    if (!isInsidePolygon(c.x, c.y, poly)) return false;
+  }
+  for (let i = 0; i < 4; i++) {
+    const p1 = corners[i]; const p2 = corners[(i + 1) % 4];
+    for (let j = 0, k = poly.length - 1; j < poly.length; k = j++) {
+      const q1 = poly[k]; const q2 = poly[j];
+      if (doSegmentsIntersect(p1, p2, q1, q2)) return false;
+    }
+  }
+  if (margin > 0) {
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const ax = poly[j].x, ay = poly[j].y; const bx = poly[i].x, by = poly[i].y;
+      for (const c of corners) { if (pointToSegmentDist(c.x, c.y, ax, ay, bx, by) < margin) return false; }
+      const cx = Math.max(Math.min(ax, px + pW), px); const cy = Math.max(Math.min(ay, py + pH), py);
+      const distToRect = Math.hypot(ax - cx, ay - cy);
+      if (distToRect < margin) return false;
+    }
+  }
+  return true;
+};
+
 const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
   const R = 6371; 
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-            Math.sin(dLon/2) * Math.sin(dLon/2);
+  const dLat = (lat2 - lat1) * Math.PI / 180; const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   return R * c;
 };
 
+// 方位から面のおすすめネーミングを取得
+const getAzimuthName = (val: number) => {
+  if (val === 1.0) return "南面";
+  if (val === 0.95) return "南東/南西面";
+  if (val === 0.84) return "東/西面";
+  if (val === 0.71) return "北東/北西面";
+  if (val === 0.64) return "北面";
+  return "屋根面";
+};
+
+// 屋根面データ専用の型
+type RoofFace = {
+  id: string;
+  pitch: number;
+  azimuth: number;
+  areaPoints: number[];
+  placedPanelsCoords: number[][];
+  activePanels: boolean[];
+  capacity: number;
+  count: number;
+  annualGen: number;
+  monthlyGen: number[];
+};
+
 export default function Home() {
+  // --- Global Settings ---
   const [refLine, setRefLine] = useState<number[]>([]);
-  const [areaPoints, setAreaPoints] = useState<number[]>([]);
   const [calibLength, setCalibLength] = useState<number>(10);
-  const [roofPitch, setRoofPitch] = useState<number>(5.5); 
   const [panelMarginMm, setPanelMarginMm] = useState<number>(500); 
   const [electricityRate, setElectricityRate] = useState<number>(35);
 
   const [panelData, setPanelData] = useState<Record<string, any[]>>({});
   const [isLoadingDb, setIsLoadingDb] = useState<boolean>(true);
-
   const [maker, setMaker] = useState<string>("");
   const [panelId, setPanelId] = useState<string>("");
   
@@ -72,131 +115,50 @@ export default function Home() {
   const [matchedStation, setMatchedStation] = useState<any>(null);
   const [isSearchingGPS, setIsSearchingGPS] = useState<boolean>(false);
 
-  const [azimuth, setAzimuth] = useState<number>(1.0); 
-  const [resultCount, setResultCount] = useState<number>(0);
-  const [resultCapacity, setResultCapacity] = useState<string>("0.00");
-  const [placedPanelsCoords, setPlacedPanelsCoords] = useState<Array<number[]>>([]);
-  
-  const [monthlyGen, setMonthlyGen] = useState<number[]>(Array(12).fill(0));
-  const [annualGen, setAnnualGen] = useState<number>(0);
-
-  const [previewPanels, setPreviewPanels] = useState<{x: number, y: number}[]>([]);
-  const [readyPanelsPx, setReadyPanelsPx] = useState<Array<number[]>>([]);
+  // --- Multi-Face Architecture ---
+  const [faces, setFaces] = useState<RoofFace[]>([]);
+  const [addAreaTrigger, setAddAreaTrigger] = useState<number>(0);
   const [simulateTrigger, setSimulateTrigger] = useState<number>(0);
-
-  const [activePanels, setActivePanels] = useState<boolean[]>([]);
 
   useEffect(() => {
     const fetchInitialMasterData = async () => {
       try {
         const { data: pData, error: pError } = await supabase.from('panels').select('*').order('kw', { ascending: false });
         if (pError) throw pError;
-
         if (pData && pData.length > 0) {
           const bundled: Record<string, any[]> = {};
-          pData.forEach(p => {
-            if (!bundled[p.maker]) bundled[p.maker] = [];
-            bundled[p.maker].push(p);
-          });
-          setPanelData(bundled);
-          const firstMaker = Object.keys(bundled)[0];
-          setMaker(firstMaker);
-          setPanelId(bundled[firstMaker][0].id);
+          pData.forEach(p => { if (!bundled[p.maker]) bundled[p.maker] = []; bundled[p.maker].push(p); });
+          setPanelData(bundled); setMaker(Object.keys(bundled)[0]); setPanelId(bundled[Object.keys(bundled)[0]][0].id);
         }
-
         const { data: sData, error: sError } = await supabase.from('solar_data').select('*');
         if (sError) throw sError;
         if (sData) setSolarDataList(sData);
-
-      } catch (error) {
-        console.error("DB読み込みエラー:", error);
-      } finally {
-        setIsLoadingDb(false);
-      }
+      } catch (error) { console.error("DB読み込みエラー:", error); } finally { setIsLoadingDb(false); }
     };
     fetchInitialMasterData();
   }, []);
 
-  useEffect(() => {
-    if (!isLoadingDb && maker && panelData[maker]) {
-      setPanelId(panelData[maker][0].id);
-    }
-  }, [maker, isLoadingDb, panelData]);
-
-  // ★復旧：これが消えていました！！！
-  const validatePanel = (px: number, py: number, pW: number, pH: number, margin: number, poly: {x: number, y: number}[]) => {
-    const corners = [
-      {x: px, y: py}, {x: px + pW, y: py}, 
-      {x: px + pW, y: py + pH}, {x: px, y: py + pH}
-    ];
-    for (const c of corners) {
-      if (!isInsidePolygon(c.x, c.y, poly)) return false;
-    }
-    for (let i = 0; i < 4; i++) {
-      const p1 = corners[i];
-      const p2 = corners[(i + 1) % 4];
-      for (let j = 0, k = poly.length - 1; j < poly.length; k = j++) {
-        const q1 = poly[k];
-        const q2 = poly[j];
-        if (doSegmentsIntersect(p1, p2, q1, q2)) return false;
-      }
-    }
-    if (margin > 0) {
-      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-        const ax = poly[j].x, ay = poly[j].y;
-        const bx = poly[i].x, by = poly[i].y;
-        for (const c of corners) {
-          if (pointToSegmentDist(c.x, c.y, ax, ay, bx, by) < margin) return false;
-        }
-        const cx = Math.max(Math.min(ax, px + pW), px);
-        const cy = Math.max(Math.min(ay, py + pH), py);
-        const distToRect = Math.hypot(ax - cx, ay - cy);
-        if (distToRect < margin) return false;
-      }
-    }
-    return true;
-  };
-
-  const findClosestStation = (lat: number, lon: number) => {
-    if (solarDataList.length === 0) return null;
-    let closest = solarDataList[0];
-    let minDistance = Infinity;
-
-    for (const station of solarDataList) {
-      if (station.lat && station.lon) {
-        const dist = calculateDistance(lat, lon, Number(station.lat), Number(station.lon));
-        if (dist < minDistance) {
-          minDistance = dist;
-          closest = station;
-        }
-      }
-    }
-    return closest;
-  };
-
-  const fallbackStringMatch = (text: string) => {
-    const prefGroup = solarDataList.filter(row => text.includes(row.pref));
-    if (prefGroup.length === 0) return null;
-    return prefGroup.find(row => text.includes(row.station)) || prefGroup[0];
-  };
-
   const executeGPSMatch = async (addressText: string) => {
-    if (!addressText) return;
+    if (!addressText || solarDataList.length === 0) return;
     setIsSearchingGPS(true);
     try {
       const res = await fetch(`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(addressText)}`);
       const data = await res.json();
-      
       if (data && data.length > 0) {
-        const lon = data[0].geometry.coordinates[0];
-        const lat = data[0].geometry.coordinates[1];
-        const bestStation = findClosestStation(lat, lon);
-        setMatchedStation(bestStation);
+        const lon = data[0].geometry.coordinates[0]; const lat = data[0].geometry.coordinates[1];
+        let closest = solarDataList[0]; let minDistance = Infinity;
+        for (const st of solarDataList) {
+          if (st.lat && st.lon) {
+            const dist = calculateDistance(lat, lon, Number(st.lat), Number(st.lon));
+            if (dist < minDistance) { minDistance = dist; closest = st; }
+          }
+        }
+        setMatchedStation(closest);
       } else {
-        setMatchedStation(fallbackStringMatch(addressText));
+        setMatchedStation(solarDataList.find(row => addressText.includes(row.pref) && addressText.includes(row.station)) || solarDataList[0]);
       }
     } catch (e) {
-      setMatchedStation(fallbackStringMatch(addressText));
+      setMatchedStation(solarDataList[0]);
     } finally {
       setIsSearchingGPS(false);
     }
@@ -210,63 +172,107 @@ export default function Home() {
         const res = await fetch(`https://zipcloud.ibsnet.co.jp/api/search?zipcode=${cleanZip}`);
         const json = await res.json();
         if (json.results && json.results.length > 0) {
-          const resObj = json.results[0];
-          const fullAddress = resObj.address1 + resObj.address2 + resObj.address3;
-          setAddress(fullAddress); 
-          await executeGPSMatch(fullAddress);
+          const fullAddress = json.results[0].address1 + json.results[0].address2 + json.results[0].address3;
+          setAddress(fullAddress); await executeGPSMatch(fullAddress);
         }
-      } catch (e) {
-        console.error(e);
-      }
+      } catch (e) { console.error(e); }
     }
   };
 
-  useEffect(() => {
-    if (isLoadingDb || !maker || !panelData[maker]) return;
+  // 発電量の計算エンジン
+  const calcGen = (activeCount: number, capacity: number, az: number) => {
+    if (activeCount === 0) return { annualGen: 0, monthlyGen: Array(12).fill(0) };
+    const targetRadiation = matchedStation ? [
+      Number(matchedStation.m1), Number(matchedStation.m2), Number(matchedStation.m3), Number(matchedStation.m4),
+      Number(matchedStation.m5), Number(matchedStation.m6), Number(matchedStation.m7), Number(matchedStation.m8),
+      Number(matchedStation.m9), Number(matchedStation.m10), Number(matchedStation.m11), Number(matchedStation.m12)
+    ] : [2.5, 3.2, 3.8, 4.5, 4.8, 4.2, 4.5, 4.8, 3.7, 3.0, 2.6, 2.3];
 
-    if (refLine.length === 4 && areaPoints.length >= 6) {
-      const dx = refLine[2] - refLine[0];
-      const dy = refLine[3] - refLine[1];
-      const refPxLength = Math.hypot(dx, dy);
-      if (refPxLength === 0) return;
-      
-      const scale = calibLength / refPxLength; 
-      const angleRad = Math.atan2(dy, dx);
-      const cosTheta = 10 / Math.sqrt(100 + Math.pow(roofPitch, 2));
+    const lossFactor = 0.8; 
+    const daysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let totalAnn = 0;
+    const monthlyData = targetRadiation.map((rad, index) => {
+      const gen = capacity * rad * lossFactor * az * daysInMonth[index];
+      totalAnn += gen;
+      return Math.round(gen);
+    });
+    return { annualGen: Math.round(totalAnn), monthlyGen: monthlyData };
+  };
 
+  // キャンバスでエリア指定が確定した時、面を追加
+  const handlePointsConfirmed = (ref: number[], area: number[]) => {
+    if (ref.length === 4) setRefLine(ref);
+    if (area.length >= 6) {
+      const newFace: RoofFace = {
+        id: `face-${Date.now()}`,
+        pitch: 5.5,
+        azimuth: 1.0,
+        areaPoints: area,
+        placedPanelsCoords: [],
+        activePanels: [],
+        capacity: 0, count: 0, annualGen: 0, monthlyGen: Array(12).fill(0)
+      };
+      setFaces(prev => {
+        if(prev.length === 0) return [newFace]; // 初回
+        return [...prev, newFace];
+      });
+    } else if (ref.length === 0 && area.length === 0) {
+      setFaces([]); // やり直し
+    }
+  };
+
+  const updateFace = (id: string, field: keyof RoofFace, value: any) => {
+    setFaces(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
+  };
+
+  const deleteFace = (id: string) => {
+    setFaces(prev => prev.filter(f => f.id !== id));
+  };
+
+  const handleSimulate = () => {
+    if (refLine.length < 4 || faces.length === 0) {
+      alert("基準線と、最低1つ以上のエリアを指定してください。");
+      return;
+    }
+
+    const makerPanels = panelData[maker] || [];
+    const selectedPanel = makerPanels.find(p => p.id === panelId) || makerPanels[0];
+    if (!selectedPanel) return;
+
+    const panelW = Number(selectedPanel.width); 
+    const panelH = Number(selectedPanel.height); 
+    const panelKw = Number(selectedPanel.kw);
+    const marginM = panelMarginMm / 1000; 
+
+    const dx = refLine[2] - refLine[0];
+    const dy = refLine[3] - refLine[1];
+    const refPxLength = Math.hypot(dx, dy);
+    if (refPxLength === 0) return;
+    
+    const scale = calibLength / refPxLength; 
+    const angleRad = Math.atan2(dy, dx);
+
+    const updatedFaces = faces.map(face => {
+      const cosTheta = 10 / Math.sqrt(100 + Math.pow(face.pitch, 2));
+
+      // エリアのローカル座標化とバウンディングボックス
       const coords = [];
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-
-      for (let i = 0; i < areaPoints.length; i += 2) {
-        const px = areaPoints[i];
-        const py = areaPoints[i+1];
+      for (let i = 0; i < face.areaPoints.length; i += 2) {
+        const px = face.areaPoints[i]; const py = face.areaPoints[i+1];
         const rx = px * Math.cos(-angleRad) - py * Math.sin(-angleRad);
         const ry = px * Math.sin(-angleRad) + py * Math.cos(-angleRad);
-        const mx = rx * scale;
-        const my = (ry * scale) / cosTheta;
-        
+        const mx = rx * scale; const my = (ry * scale) / cosTheta;
         coords.push({x: mx, y: my});
-        if (mx < minX) minX = mx;
-        if (mx > maxX) maxX = mx;
-        if (my < minY) minY = my;
-        if (my > maxY) maxY = my;
+        if (mx < minX) minX = mx; if (mx > maxX) maxX = mx;
+        if (my < minY) minY = my; if (my > maxY) maxY = my;
       }
-
       const normalizedCoords = coords.map(p => ({ x: p.x - minX, y: p.y - minY }));
-      const wSpan = maxX - minX;
-      const hSpan = maxY - minY;
+      const wSpan = maxX - minX; const hSpan = maxY - minY;
 
-      const makerPanels = panelData[maker] || [];
-      const selectedPanel = makerPanels.find(p => p.id === panelId) || makerPanels[0];
-      if (!selectedPanel) return;
-
-      const panelW = Number(selectedPanel.width); 
-      const panelH = Number(selectedPanel.height); 
-      const marginM = panelMarginMm / 1000; 
-
+      // レイアウト探索
       let bestLayout: {x: number, y: number}[] = [];
       let maxCount = -1;
-      
       const steps = 4; 
       for(let oy = 0; oy < panelH; oy += panelH / steps) {
         for(let ox = 0; ox < panelW; ox += panelW / steps) {
@@ -279,16 +285,14 @@ export default function Home() {
              }
            }
            if (currentLayout.length > maxCount) {
-              maxCount = currentLayout.length;
-              bestLayout = currentLayout;
+              maxCount = currentLayout.length; bestLayout = currentLayout;
            }
         }
       }
-      setPreviewPanels(bestLayout);
 
+      // ピクセル座標に戻す
       const realMetersToPx = (mx: number, my: number) => {
-        const rx = mx / scale;
-        const ry = (my * cosTheta) / scale;
+        const rx = mx / scale; const ry = (my * cosTheta) / scale;
         const px = rx * Math.cos(angleRad) - ry * Math.sin(angleRad);
         const py = rx * Math.sin(angleRad) + ry * Math.cos(angleRad);
         return [px, py];
@@ -296,312 +300,213 @@ export default function Home() {
 
       const finalPanelsPx: Array<number[]> = [];
       bestLayout.forEach(panel => {
-        const absX = panel.x + minX;
-        const absY = panel.y + minY;
-        const c1 = realMetersToPx(absX, absY);
-        const c2 = realMetersToPx(absX + panelW, absY);
-        const c3 = realMetersToPx(absX + panelW, absY + panelH);
-        const c4 = realMetersToPx(absX, absY + panelH);
+        const absX = panel.x + minX; const absY = panel.y + minY;
+        const c1 = realMetersToPx(absX, absY); const c2 = realMetersToPx(absX + panelW, absY);
+        const c3 = realMetersToPx(absX + panelW, absY + panelH); const c4 = realMetersToPx(absX, absY + panelH);
         finalPanelsPx.push([...c1, ...c2, ...c3, ...c4]);
       });
-      setReadyPanelsPx(finalPanelsPx);
-      
-      setActivePanels(new Array(finalPanelsPx.length).fill(true));
 
-    } else {
-      setPreviewPanels([]);
-      setReadyPanelsPx([]);
-      setActivePanels([]);
-    }
-  }, [refLine, areaPoints, calibLength, roofPitch, maker, panelId, panelMarginMm, panelData, isLoadingDb]);
+      // ON/OFF状態の維持（前回と枚数が同じなら記憶を引き継ぐ）
+      const activePanels = finalPanelsPx.length === face.activePanels.length ? face.activePanels : new Array(finalPanelsPx.length).fill(true);
+      const activeCount = activePanels.filter(v => v).length; 
+      const capacity = activeCount * panelKw;
+      const gen = calcGen(activeCount, capacity, face.azimuth);
 
-  const handlePointsConfirmed = (ref: number[], area: number[]) => {
-    setRefLine(ref);
-    setAreaPoints(area);
-    setPlacedPanelsCoords([]);
-    setResultCount(0);
-    setResultCapacity("0.00");
-    setAnnualGen(0); 
-    setActivePanels([]);
-  };
-
-  const recalculateResults = (currentActive: boolean[]) => {
-    if (previewPanels.length === 0) return;
-
-    const makerPanels = panelData[maker] || [];
-    const selectedPanel = makerPanels.find(p => p.id === panelId) || makerPanels[0];
-    if (!selectedPanel) return;
-
-    const panelKw = Number(selectedPanel.kw); 
-    const activeCount = currentActive.filter(v => v).length; 
-    const capacity = activeCount * panelKw;
-    
-    setResultCount(activeCount);
-    setResultCapacity(capacity.toFixed(2));
-
-    if (activeCount === 0) {
-      setMonthlyGen(Array(12).fill(0));
-      setAnnualGen(0);
-      return;
-    }
-
-    const targetRadiation = matchedStation ? [
-      Number(matchedStation.m1), Number(matchedStation.m2), Number(matchedStation.m3), Number(matchedStation.m4),
-      Number(matchedStation.m5), Number(matchedStation.m6), Number(matchedStation.m7), Number(matchedStation.m8),
-      Number(matchedStation.m9), Number(matchedStation.m10), Number(matchedStation.m11), Number(matchedStation.m12)
-    ] : [2.5, 3.2, 3.8, 4.5, 4.8, 4.2, 4.5, 4.8, 3.7, 3.0, 2.6, 2.3];
-
-    const lossFactor = 0.8; 
-    const daysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-
-    let totalAnn = 0;
-    const monthlyData = targetRadiation.map((rad, index) => {
-      const gen = capacity * rad * lossFactor * azimuth * daysInMonth[index];
-      totalAnn += gen;
-      return Math.round(gen);
+      return {
+        ...face,
+        placedPanelsCoords: finalPanelsPx,
+        activePanels,
+        count: activeCount,
+        capacity,
+        annualGen: gen.annualGen,
+        monthlyGen: gen.monthlyGen
+      };
     });
 
-    setMonthlyGen(monthlyData);
-    setAnnualGen(Math.round(totalAnn));
-  };
-
-  const handleSimulate = () => {
-    if (refLine.length < 4 || areaPoints.length < 6 || previewPanels.length === 0) {
-      alert("エリアが指定されていないか、パネルを配置できるスペースがありません。");
-      return;
-    }
-    setPlacedPanelsCoords(readyPanelsPx);
-    recalculateResults(activePanels); 
+    setFaces(updatedFaces);
     setSimulateTrigger(prev => prev + 1);
   };
 
-  const handleTogglePanel = (index: number) => {
-    const newActive = [...activePanels];
-    newActive[index] = !newActive[index]; 
-    setActivePanels(newActive);
+  const handleTogglePanel = (faceIndex: number, panelIndex: number) => {
+    setFaces(prev => {
+      const newFaces = [...prev];
+      const face = {...newFaces[faceIndex]};
+      const newActive = [...face.activePanels];
+      newActive[panelIndex] = !newActive[panelIndex];
+      face.activePanels = newActive;
 
-    if (resultCount > 0 || resultCapacity !== "0.00") {
-      recalculateResults(newActive);
-    }
+      const makerPanels = panelData[maker] || [];
+      const selectedPanel = makerPanels.find(p => p.id === panelId) || makerPanels[0];
+      const panelKw = selectedPanel ? Number(selectedPanel.kw) : 0;
+
+      const activeCount = newActive.filter(v => v).length;
+      const capacity = activeCount * panelKw;
+      const gen = calcGen(activeCount, capacity, face.azimuth);
+
+      face.count = activeCount;
+      face.capacity = capacity;
+      face.annualGen = gen.annualGen;
+      face.monthlyGen = gen.monthlyGen;
+
+      newFaces[faceIndex] = face;
+      return newFaces;
+    });
   };
+
+  // 複数面の合算
+  const totalCount = faces.reduce((sum, f) => sum + f.count, 0);
+  const totalCapacity = faces.reduce((sum, f) => sum + f.capacity, 0);
+  const totalAnnualGen = faces.reduce((sum, f) => sum + f.annualGen, 0);
+  const totalMonthlyGen = Array(12).fill(0);
+  faces.forEach(f => {
+    f.monthlyGen.forEach((val, i) => { totalMonthlyGen[i] += val; });
+  });
 
   return (
     <main className="flex h-[100dvh] w-full bg-gray-50 text-gray-800 font-sans overflow-hidden">
       <section className="flex-grow p-4 flex flex-col overflow-hidden h-full">
         <header className="mb-2 flex-none">
-          <h1 className="text-xl font-bold text-gray-900">Solar Sim Pro</h1>
+          <h1 className="text-xl font-bold text-gray-900">Solar Sim Pro <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded ml-2">複数屋根合算対応</span></h1>
         </header>
         <div className="flex-grow border border-gray-300 rounded-md bg-white shadow-sm overflow-hidden relative min-h-0">
           <RoofCanvas 
             onPointsConfirmed={handlePointsConfirmed} 
-            placedPanels={placedPanelsCoords}
+            savedFaces={faces}
             simulateTrigger={simulateTrigger} 
             calibLength={calibLength}
-            activePanels={activePanels}
             onTogglePanel={handleTogglePanel}
+            addAreaTrigger={addAreaTrigger}
           />
         </div>
       </section>
 
-      <aside className="w-[450px] bg-white border-l border-gray-200 shadow-sm p-5 flex flex-col overflow-y-auto h-full flex-none">
-        <h2 className="text-base font-semibold mb-4 border-b pb-1">シミュレーション設定</h2>
-        <div className="space-y-4">
-          
-          <div className="p-3 bg-red-50 rounded-lg border border-red-100">
-            <h3 className="text-xs font-bold text-red-800 mb-2">1. 基準線の実測長</h3>
-            <div className="flex items-center space-x-2">
-              <input 
-                type="number" value={calibLength}
-                onChange={(e) => setCalibLength(Number(e.target.value))}
-                className="border p-2 rounded-md w-full text-right bg-white text-sm font-medium"
-              />
-              <span className="text-xs text-gray-700 w-16">メートル</span>
+      <aside className="w-[450px] bg-white border-l border-gray-200 shadow-sm p-4 flex flex-col overflow-y-auto h-full flex-none">
+        
+        {/* === 共通設定エリア === */}
+        <h2 className="text-sm font-semibold mb-3 border-b pb-1 text-gray-700">【共通】環境＆パネル設定</h2>
+        <div className="space-y-3 mb-6">
+          <div className="p-2 bg-red-50 rounded border border-red-100 flex items-center justify-between">
+            <span className="text-xs font-bold text-red-800">基準線の実測長:</span>
+            <div className="flex items-center space-x-1">
+              <input type="number" value={calibLength} onChange={(e) => setCalibLength(Number(e.target.value))} className="border p-1 rounded w-16 text-right text-xs bg-white" />
+              <span className="text-xs text-gray-700">m</span>
             </div>
           </div>
 
-          <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 shadow-inner">
-            <div className="flex justify-between items-center mb-2">
-              <h3 className="text-xs font-bold text-gray-700">2. 屋根傾斜 & パネル仕様</h3>
-              <div className="flex items-center space-x-1">
-                <span className="text-xs text-gray-600">傾斜:</span>
-                <input 
-                  type="number" value={roofPitch}
-                  onChange={(e) => setRoofPitch(Number(e.target.value))}
-                  className="border p-1 rounded w-14 text-right text-xs bg-white font-medium" step={0.5} min={0}
-                />
-                <span className="text-xs text-gray-700">寸</span>
-              </div>
-            </div>
-
-            {isLoadingDb ? (
-              <div className="flex justify-center items-center py-6 text-xs text-blue-600 font-bold animate-pulse">
-                ☁️ クラウドからパネルデータを読み込み中...
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                <div>
-                  <label className="text-[10px] text-gray-500 block mb-0.5">メーカー</label>
-                  <select 
-                    value={maker} onChange={(e) => setMaker(e.target.value)}
-                    className="border p-2 rounded-md w-full bg-white text-xs font-medium"
-                  >
-                    {Object.keys(panelData).map((m) => (<option key={m} value={m}>{m}</option>))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] text-gray-500 block mb-0.5">型番 (寸法・出力)</label>
-                  <select 
-                    value={panelId} onChange={(e) => setPanelId(e.target.value)}
-                    className="border p-2 rounded-md w-full bg-white text-xs font-medium"
-                  >
-                    {panelData[maker]?.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
-                  </select>
-                </div>
-                <div className="flex items-center justify-between pt-2 border-t border-gray-200">
-                  <span className="text-xs text-gray-600 font-bold">離隔幅 (屋根端からの隙間):</span>
-                  <div className="flex items-center space-x-1">
-                    <input 
-                      type="number" value={panelMarginMm}
-                      onChange={(e) => setPanelMarginMm(Number(e.target.value))}
-                      className="border p-1 rounded w-20 text-right text-xs bg-white font-medium" min={0} step={100}
-                    />
-                    <span className="text-xs text-gray-600">mm</span>
-                  </div>
+          <div className="p-2 bg-gray-50 rounded border border-gray-200">
+            {isLoadingDb ? ( <div className="text-xs text-center text-blue-500 animate-pulse">DB読込中...</div> ) : (
+              <div className="space-y-2">
+                <select value={maker} onChange={(e) => setMaker(e.target.value)} className="border p-1.5 rounded w-full text-xs">
+                  {Object.keys(panelData).map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <select value={panelId} onChange={(e) => setPanelId(e.target.value)} className="border p-1.5 rounded w-full text-xs">
+                  {panelData[maker]?.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-gray-600">離隔幅:</span>
+                  <div><input type="number" value={panelMarginMm} onChange={(e) => setPanelMarginMm(Number(e.target.value))} className="border p-1 rounded w-16 text-right" step={100} /> mm</div>
                 </div>
               </div>
             )}
           </div>
 
-          <div className="p-3 bg-green-50 rounded-lg border border-green-100">
-            <h3 className="text-xs font-bold text-green-800 mb-2">3. 環境データ (NEDO日射量自動連動)</h3>
-            <div className="space-y-2.5">
-              <div className="grid grid-cols-3 gap-2">
-                <div className="col-span-1">
-                  <label className="text-[10px] text-gray-500 block mb-0.5">郵便番号</label>
-                  <input 
-                    type="text" placeholder="981-0000" value={zipCode}
-                    onChange={(e) => handleZipCodeChange(e.target.value)}
-                    className="border p-2 rounded-md w-full text-xs bg-white font-medium"
-                  />
-                </div>
-                <div className="col-span-2">
-                  <label className="text-[10px] text-gray-500 block mb-0.5">住所（手入力は枠外タップで検索）</label>
-                  <input 
-                    type="text" placeholder="例: 宮城県登米市" value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                    onBlur={() => executeGPSMatch(address)}
-                    className="border p-2 rounded-md w-full text-xs bg-white font-medium"
-                  />
-                </div>
-              </div>
-
-              {isSearchingGPS ? (
-                <div className="text-[10px] text-blue-600 bg-blue-50 p-2 rounded border border-blue-200 shadow-sm font-semibold animate-pulse">
-                  🛰️ 国土地理院APIと通信中... GPS座標から最短の気象台を検索しています...
-                </div>
-              ) : matchedStation ? (
-                <div className="text-[10px] text-green-700 bg-white p-2 rounded border border-green-200 shadow-sm font-semibold">
-                  🎯 GPS最寄り判定：<span className="text-blue-700 font-bold">【{matchedStation.pref} / {matchedStation.station}】</span>のデータを計算に適用中！
-                </div>
-              ) : (
-                <div className="text-[10px] text-amber-700 bg-amber-50 p-2 rounded border border-amber-200 shadow-sm">
-                  💡 郵便番号か住所を入力すると、地図上の直線距離から最寄りの気象台を自動で探し出します。
-                </div>
-              )}
-
-              <div className="flex items-center justify-between pt-1">
-                <span className="text-xs text-gray-600 font-bold">屋根の方位:</span>
-                <select 
-                  value={azimuth} onChange={(e) => setAzimuth(Number(e.target.value))}
-                  className="border p-1.5 rounded-md w-28 bg-white text-xs font-medium"
-                >
-                  <option value={1.0}>南</option>
-                  <option value={0.95}>南東・南西</option>
-                  <option value={0.84}>東・西</option>
-                  <option value={0.71}>北東・北西</option>
-                  <option value={0.64}>北</option>
-                </select>
-              </div>
+          <div className="p-2 bg-green-50 rounded border border-green-100">
+            <div className="flex gap-2 mb-2">
+              <input type="text" placeholder="〒" value={zipCode} onChange={(e) => handleZipCodeChange(e.target.value)} className="border p-1.5 rounded w-20 text-xs" />
+              <input type="text" placeholder="住所検索" value={address} onChange={(e) => setAddress(e.target.value)} onBlur={() => executeGPSMatch(address)} className="border p-1.5 rounded flex-grow text-xs" />
             </div>
+            {matchedStation && <div className="text-[10px] text-green-700 font-bold">🎯 NEDO: {matchedStation.pref} / {matchedStation.station} 適用中</div>}
           </div>
-
-          <div className="p-3 bg-yellow-50 rounded-lg border border-yellow-200">
-            <h3 className="text-xs font-bold text-yellow-800 mb-2">4. 経済効果（電気代削減）</h3>
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-gray-700 font-bold">電気代単価:</span>
-              <div className="flex items-center space-x-1">
-                <input 
-                  type="number" value={electricityRate}
-                  onChange={(e) => setElectricityRate(Number(e.target.value))}
-                  className="border p-1.5 rounded w-20 text-right text-xs bg-white font-medium shadow-sm" step={1} min={10}
-                />
-                <span className="text-xs text-gray-700">円/kWh</span>
-              </div>
-            </div>
-          </div>
-
         </div>
 
-        <div className="mt-6 border-t border-gray-200 pt-4 flex-grow flex flex-col justify-end">
-          <button 
-            onClick={handleSimulate} disabled={isLoadingDb}
-            className={`w-full text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-md text-sm mb-4 ${isLoadingDb ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
-          >
-            シミュレーション実行
+        {/* === 個別設定（複数面）エリア === */}
+        <h2 className="text-sm font-semibold mb-3 border-b pb-1 text-gray-700 flex justify-between items-end">
+          <span>【個別】屋根面ごとの設定</span>
+        </h2>
+        
+        <div className="space-y-3 flex-grow">
+          {faces.length === 0 ? (
+            <div className="text-xs text-center text-gray-400 py-4 border border-dashed rounded">エリアを指定してください</div>
+          ) : (
+            faces.map((face, i) => (
+              <div key={face.id} className={`p-3 rounded-lg border ${face.count > 0 ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200 shadow-sm'}`}>
+                <div className="flex justify-between items-center mb-2">
+                  <span className="font-bold text-sm text-blue-900">{getAzimuthName(face.azimuth)} <span className="text-xs font-normal text-gray-500">(エリア{i+1})</span></span>
+                  <button onClick={() => deleteFace(face.id)} className="text-[10px] text-red-500 hover:text-red-700 px-2 py-1 border border-red-200 rounded bg-white">削除</button>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-0.5">屋根の方位</label>
+                    <select value={face.azimuth} onChange={(e) => updateFace(face.id, 'azimuth', Number(e.target.value))} className="border p-1.5 rounded w-full text-xs">
+                      <option value={1.0}>南</option><option value={0.95}>南東・南西</option><option value={0.84}>東・西</option><option value={0.71}>北東・北西</option><option value={0.64}>北</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-0.5">傾斜(寸)</label>
+                    <input type="number" value={face.pitch} onChange={(e) => updateFace(face.id, 'pitch', Number(e.target.value))} className="border p-1.5 rounded w-full text-xs text-right" step={0.5} min={0} />
+                  </div>
+                </div>
+
+                {face.count > 0 && (
+                   <div className="text-right text-xs font-bold text-blue-700 border-t border-blue-100 pt-1 mt-1">
+                     {face.count} 枚 / {face.capacity.toFixed(2)} kW
+                   </div>
+                )}
+              </div>
+            ))
+          )}
+
+          {faces.length > 0 && (
+            <button 
+              onClick={() => setAddAreaTrigger(prev => prev + 1)} 
+              className="w-full py-2 border-2 border-dashed border-blue-300 text-blue-600 font-bold rounded-lg text-xs hover:bg-blue-50 transition-colors"
+            >
+              ＋ 新しい屋根面を追加する
+            </button>
+          )}
+        </div>
+
+        {/* === 合算結果エリア === */}
+        <div className="mt-4 border-t border-gray-200 pt-4 flex flex-col flex-none">
+          <button onClick={handleSimulate} disabled={isLoadingDb || faces.length === 0} className={`w-full text-white font-bold py-3 px-4 rounded-lg shadow-md text-sm mb-4 ${isLoadingDb || faces.length === 0 ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
+            全エリア一括シミュレーション
           </button>
           
-          {resultCount > 0 && (
-            <div className="space-y-4">
-              <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 shadow-inner text-center">
-                <p className="text-[11px] text-blue-600 font-bold mb-0.5">想定最大システム容量</p>
-                <p className="text-3xl font-extrabold text-blue-800">
-                  {resultCapacity} <span className="text-lg font-normal">kW</span>
-                </p>
-                <p className="text-xs text-gray-600 font-medium mt-0.5">設置枚数: {resultCount} 枚</p>
+          {totalCount > 0 && (
+            <div className="space-y-3">
+              <div className="bg-blue-600 p-3 rounded-lg shadow-inner text-center text-white">
+                <p className="text-[10px] font-bold opacity-80 mb-0.5">システム総合計 ({faces.length}面)</p>
+                <p className="text-2xl font-extrabold">{totalCapacity.toFixed(2)} <span className="text-sm font-normal">kW</span></p>
+                <p className="text-xs font-medium mt-0.5 opacity-90">総設置枚数: {totalCount} 枚</p>
               </div>
 
-              {annualGen > 0 && (
+              {totalAnnualGen > 0 && (
                 <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm text-xs">
-                  {matchedStation && (
-                    <div className="mb-2 p-1.5 bg-green-50 border border-green-100 rounded text-[10px] text-gray-600 font-medium">
-                      📡 <strong>適用中のデータソース:</strong> NEDO気象台（{matchedStation.pref} - {matchedStation.station}）
-                    </div>
-                  )}
-                  <div className="flex justify-between items-end mb-2 border-b pb-1">
-                    <p className="font-bold text-gray-700">月別予測発電量</p>
-                    <p className="text-[10px] text-gray-500">年間: <span className="font-bold text-blue-600 text-sm">{annualGen.toLocaleString()}</span> kWh</p>
+                  <div className="flex justify-between items-end mb-1 border-b pb-1">
+                    <p className="font-bold text-gray-700">合算予測発電量</p>
+                    <p className="text-[10px] text-gray-500">年間: <span className="font-bold text-blue-600 text-sm">{totalAnnualGen.toLocaleString()}</span> kWh</p>
                   </div>
-                  
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                    <div className="space-y-1">
-                      {monthlyGen.slice(0, 6).map((val, i) => (
-                        <div key={i} className="flex justify-between border-b border-gray-50 py-0.5">
-                          <span className="text-gray-400">{i + 1}月</span>
-                          <span className="font-bold text-gray-700">{val.toLocaleString()} kWh</span>
-                        </div>
-                      ))}
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px]">
+                    <div className="space-y-0.5">
+                      {totalMonthlyGen.slice(0, 6).map((val, i) => (<div key={i} className="flex justify-between border-b border-gray-50"><span className="text-gray-400">{i + 1}月</span><span className="font-bold">{val.toLocaleString()}</span></div>))}
                     </div>
-                    <div className="space-y-1">
-                      {monthlyGen.slice(6, 12).map((val, i) => (
-                        <div key={i + 6} className="flex justify-between border-b border-gray-50 py-0.5">
-                          <span className="text-gray-400">{i + 7}月</span>
-                          <span className="font-bold text-gray-700">{val.toLocaleString()} kWh</span>
-                        </div>
-                      ))}
+                    <div className="space-y-0.5">
+                      {totalMonthlyGen.slice(6, 12).map((val, i) => (<div key={i+6} className="flex justify-between border-b border-gray-50"><span className="text-gray-400">{i + 7}月</span><span className="font-bold">{val.toLocaleString()}</span></div>))}
                     </div>
                   </div>
                 </div>
               )}
 
-              {annualGen > 0 && (
-                <div className="bg-yellow-100 border border-yellow-300 rounded-lg p-3 shadow-md text-center">
-                  <p className="text-[11px] text-yellow-800 font-bold mb-0.5">年間想定削減額（目安）</p>
-                  <p className="text-2xl font-extrabold text-yellow-900">
-                    {Math.round(annualGen * electricityRate).toLocaleString()} <span className="text-sm font-normal">円/年</span>
-                  </p>
+              {totalAnnualGen > 0 && (
+                <div className="bg-yellow-100 border border-yellow-300 rounded-lg p-2 shadow-md flex justify-between items-center">
+                  <span className="text-[10px] text-yellow-800 font-bold ml-2">想定電気代単価: <input type="number" value={electricityRate} onChange={(e) => setElectricityRate(Number(e.target.value))} className="border border-yellow-300 rounded w-12 text-right p-0.5 bg-white" /> 円</span>
+                  <div className="text-right mr-2">
+                    <p className="text-[10px] text-yellow-800 font-bold mb-0.5">年間想定削減額</p>
+                    <p className="text-lg font-extrabold text-yellow-900">{Math.round(totalAnnualGen * electricityRate).toLocaleString()} <span className="text-[10px] font-normal">円/年</span></p>
+                  </div>
                 </div>
               )}
-              
             </div>
           )}
         </div>

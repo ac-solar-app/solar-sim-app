@@ -82,10 +82,9 @@ const getAzimuthName = (val: number) => {
   return "屋根面";
 };
 
-// ★修正：パネルの向き（orientation）を面ごとに記憶できるように追加
 type RoofFace = {
   id: string;
-  pitch: number;
+  pitch: number | string; // ★空文字を許容
   azimuth: number;
   orientation: 'landscape' | 'portrait'; 
   areaPoints: number[];
@@ -99,9 +98,10 @@ type RoofFace = {
 
 export default function Home() {
   const [refLine, setRefLine] = useState<number[]>([]);
-  const [calibLength, setCalibLength] = useState<number>(10);
-  const [panelMarginMm, setPanelMarginMm] = useState<number>(500); 
-  const [electricityRate, setElectricityRate] = useState<number>(35);
+  // ★空文字を許容するように変更
+  const [calibLength, setCalibLength] = useState<number | string>(10);
+  const [panelMarginMm, setPanelMarginMm] = useState<number | string>(500); 
+  const [electricityRate, setElectricityRate] = useState<number | string>(35);
 
   const [panelData, setPanelData] = useState<Record<string, any[]>>({});
   const [isLoadingDb, setIsLoadingDb] = useState<boolean>(true);
@@ -203,7 +203,7 @@ export default function Home() {
         id: `face-${Date.now()}`,
         pitch: 5.5,
         azimuth: 1.0,
-        orientation: 'landscape', // デフォルトは横置き
+        orientation: 'landscape', 
         areaPoints: area,
         placedPanelsCoords: [],
         activePanels: [],
@@ -239,20 +239,23 @@ export default function Home() {
     const basePanelW = Number(selectedPanel.width); 
     const basePanelH = Number(selectedPanel.height); 
     const panelKw = Number(selectedPanel.kw);
-    const marginM = panelMarginMm / 1000; 
+    // ★空文字対策として Number() で安全に変換
+    const marginM = Number(panelMarginMm) / 1000; 
 
     const dx = refLine[2] - refLine[0];
     const dy = refLine[3] - refLine[1];
     const refPxLength = Math.hypot(dx, dy);
     if (refPxLength === 0) return;
     
-    const scale = calibLength / refPxLength; 
+    // ★空文字対策
+    const scale = Number(calibLength) / refPxLength; 
     const angleRad = Math.atan2(dy, dx);
 
     const updatedFaces = faces.map(face => {
-      const cosTheta = 10 / Math.sqrt(100 + Math.pow(face.pitch, 2));
+      // ★空文字対策（未入力時は便宜上5.5寸として計算）
+      const safePitch = face.pitch === '' ? 5.5 : Number(face.pitch);
+      const cosTheta = 10 / Math.sqrt(100 + Math.pow(safePitch, 2));
       
-      // ★修正：選択された「パネルの向き」に応じて、縦横のサイズをひっくり返す
       const effPanelW = face.orientation === 'portrait' ? basePanelH : basePanelW;
       const effPanelH = face.orientation === 'portrait' ? basePanelW : basePanelH;
 
@@ -274,7 +277,6 @@ export default function Home() {
       let maxCount = -1;
       const steps = 4; 
       
-      // ひっくり返したサイズ（effPanelW/H）で計算を行う
       for(let oy = 0; oy < effPanelH; oy += effPanelH / steps) {
         for(let ox = 0; ox < effPanelW; ox += effPanelW / steps) {
            const currentLayout = [];
@@ -371,7 +373,7 @@ export default function Home() {
             onPointsConfirmed={handlePointsConfirmed} 
             savedFaces={faces}
             simulateTrigger={simulateTrigger} 
-            calibLength={calibLength}
+            calibLength={Number(calibLength)} // ★安全に数値化して渡す
             onTogglePanel={handleTogglePanel}
             addAreaTrigger={addAreaTrigger}
           />
@@ -385,7 +387,13 @@ export default function Home() {
           <div className="p-2 bg-red-50 rounded border border-red-100 flex items-center justify-between">
             <span className="text-xs font-bold text-red-800">基準線の実測長:</span>
             <div className="flex items-center space-x-1">
-              <input type="number" value={calibLength} onChange={(e) => setCalibLength(Number(e.target.value))} className="border p-1 rounded w-16 text-right text-xs bg-white" />
+              <input 
+                type="number" 
+                value={calibLength} 
+                // ★修正：空っぽになったら空文字('')をセットする
+                onChange={(e) => setCalibLength(e.target.value === '' ? '' : Number(e.target.value))} 
+                className="border p-1 rounded w-16 text-right text-xs bg-white" 
+              />
               <span className="text-xs text-gray-700">m</span>
             </div>
           </div>
@@ -401,7 +409,15 @@ export default function Home() {
                 </select>
                 <div className="flex justify-between items-center text-xs">
                   <span className="text-gray-600">離隔幅:</span>
-                  <div><input type="number" value={panelMarginMm} onChange={(e) => setPanelMarginMm(Number(e.target.value))} className="border p-1 rounded w-16 text-right" step={100} /> mm</div>
+                  <div>
+                    <input 
+                      type="number" 
+                      value={panelMarginMm} 
+                      onChange={(e) => setPanelMarginMm(e.target.value === '' ? '' : Number(e.target.value))} 
+                      className="border p-1 rounded w-16 text-right" 
+                      step={100} 
+                    /> mm
+                  </div>
                 </div>
               </div>
             )}
@@ -431,7 +447,6 @@ export default function Home() {
                   <button onClick={() => deleteFace(face.id)} className="text-[10px] text-red-500 hover:text-red-700 px-2 py-1 border border-red-200 rounded bg-white">削除</button>
                 </div>
                 
-                {/* ★修正：方位・傾斜の横に「パネル配置（横置き/縦置き）」のスイッチを追加 */}
                 <div className="grid grid-cols-3 gap-2 mb-2">
                   <div>
                     <label className="text-[10px] text-gray-500 block mb-0.5">屋根の方位</label>
@@ -441,7 +456,13 @@ export default function Home() {
                   </div>
                   <div>
                     <label className="text-[10px] text-gray-500 block mb-0.5">傾斜(寸)</label>
-                    <input type="number" value={face.pitch} onChange={(e) => updateFace(face.id, 'pitch', Number(e.target.value))} className="border p-1.5 rounded w-full text-xs text-right" step={0.5} min={0} />
+                    <input 
+                      type="number" 
+                      value={face.pitch} 
+                      onChange={(e) => updateFace(face.id, 'pitch', e.target.value === '' ? '' : Number(e.target.value))} 
+                      className="border p-1.5 rounded w-full text-xs text-right" 
+                      step={0.5} min={0} 
+                    />
                   </div>
                   <div>
                     <label className="text-[10px] text-gray-500 block mb-0.5">パネル配置</label>
@@ -503,10 +524,17 @@ export default function Home() {
 
               {totalAnnualGen > 0 && (
                 <div className="bg-yellow-100 border border-yellow-300 rounded-lg p-2 shadow-md flex justify-between items-center">
-                  <span className="text-[10px] text-yellow-800 font-bold ml-2">想定電気代単価: <input type="number" value={electricityRate} onChange={(e) => setElectricityRate(Number(e.target.value))} className="border border-yellow-300 rounded w-12 text-right p-0.5 bg-white" /> 円</span>
+                  <span className="text-[10px] text-yellow-800 font-bold ml-2">想定電気代単価: 
+                    <input 
+                      type="number" 
+                      value={electricityRate} 
+                      onChange={(e) => setElectricityRate(e.target.value === '' ? '' : Number(e.target.value))} 
+                      className="border border-yellow-300 rounded w-12 text-right p-0.5 bg-white ml-1" 
+                    /> 円
+                  </span>
                   <div className="text-right mr-2">
                     <p className="text-[10px] text-yellow-800 font-bold mb-0.5">年間想定削減額</p>
-                    <p className="text-lg font-extrabold text-yellow-900">{Math.round(totalAnnualGen * electricityRate).toLocaleString()} <span className="text-[10px] font-normal">円/年</span></p>
+                    <p className="text-lg font-extrabold text-yellow-900">{Math.round(totalAnnualGen * Number(electricityRate)).toLocaleString()} <span className="text-[10px] font-normal">円/年</span></p>
                   </div>
                 </div>
               )}

@@ -73,7 +73,6 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 };
 
-// 方位から面のおすすめネーミングを取得
 const getAzimuthName = (val: number) => {
   if (val === 1.0) return "南面";
   if (val === 0.95) return "南東/南西面";
@@ -83,11 +82,12 @@ const getAzimuthName = (val: number) => {
   return "屋根面";
 };
 
-// 屋根面データ専用の型
+// ★修正：パネルの向き（orientation）を面ごとに記憶できるように追加
 type RoofFace = {
   id: string;
   pitch: number;
   azimuth: number;
+  orientation: 'landscape' | 'portrait'; 
   areaPoints: number[];
   placedPanelsCoords: number[][];
   activePanels: boolean[];
@@ -98,7 +98,6 @@ type RoofFace = {
 };
 
 export default function Home() {
-  // --- Global Settings ---
   const [refLine, setRefLine] = useState<number[]>([]);
   const [calibLength, setCalibLength] = useState<number>(10);
   const [panelMarginMm, setPanelMarginMm] = useState<number>(500); 
@@ -115,7 +114,6 @@ export default function Home() {
   const [matchedStation, setMatchedStation] = useState<any>(null);
   const [isSearchingGPS, setIsSearchingGPS] = useState<boolean>(false);
 
-  // --- Multi-Face Architecture ---
   const [faces, setFaces] = useState<RoofFace[]>([]);
   const [addAreaTrigger, setAddAreaTrigger] = useState<number>(0);
   const [simulateTrigger, setSimulateTrigger] = useState<number>(0);
@@ -179,7 +177,6 @@ export default function Home() {
     }
   };
 
-  // 発電量の計算エンジン
   const calcGen = (activeCount: number, capacity: number, az: number) => {
     if (activeCount === 0) return { annualGen: 0, monthlyGen: Array(12).fill(0) };
     const targetRadiation = matchedStation ? [
@@ -199,7 +196,6 @@ export default function Home() {
     return { annualGen: Math.round(totalAnn), monthlyGen: monthlyData };
   };
 
-  // キャンバスでエリア指定が確定した時、面を追加
   const handlePointsConfirmed = (ref: number[], area: number[]) => {
     if (ref.length === 4) setRefLine(ref);
     if (area.length >= 6) {
@@ -207,17 +203,18 @@ export default function Home() {
         id: `face-${Date.now()}`,
         pitch: 5.5,
         azimuth: 1.0,
+        orientation: 'landscape', // デフォルトは横置き
         areaPoints: area,
         placedPanelsCoords: [],
         activePanels: [],
         capacity: 0, count: 0, annualGen: 0, monthlyGen: Array(12).fill(0)
       };
       setFaces(prev => {
-        if(prev.length === 0) return [newFace]; // 初回
+        if(prev.length === 0) return [newFace];
         return [...prev, newFace];
       });
     } else if (ref.length === 0 && area.length === 0) {
-      setFaces([]); // やり直し
+      setFaces([]); 
     }
   };
 
@@ -239,8 +236,8 @@ export default function Home() {
     const selectedPanel = makerPanels.find(p => p.id === panelId) || makerPanels[0];
     if (!selectedPanel) return;
 
-    const panelW = Number(selectedPanel.width); 
-    const panelH = Number(selectedPanel.height); 
+    const basePanelW = Number(selectedPanel.width); 
+    const basePanelH = Number(selectedPanel.height); 
     const panelKw = Number(selectedPanel.kw);
     const marginM = panelMarginMm / 1000; 
 
@@ -254,8 +251,11 @@ export default function Home() {
 
     const updatedFaces = faces.map(face => {
       const cosTheta = 10 / Math.sqrt(100 + Math.pow(face.pitch, 2));
+      
+      // ★修正：選択された「パネルの向き」に応じて、縦横のサイズをひっくり返す
+      const effPanelW = face.orientation === 'portrait' ? basePanelH : basePanelW;
+      const effPanelH = face.orientation === 'portrait' ? basePanelW : basePanelH;
 
-      // エリアのローカル座標化とバウンディングボックス
       const coords = [];
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       for (let i = 0; i < face.areaPoints.length; i += 2) {
@@ -270,16 +270,17 @@ export default function Home() {
       const normalizedCoords = coords.map(p => ({ x: p.x - minX, y: p.y - minY }));
       const wSpan = maxX - minX; const hSpan = maxY - minY;
 
-      // レイアウト探索
       let bestLayout: {x: number, y: number}[] = [];
       let maxCount = -1;
       const steps = 4; 
-      for(let oy = 0; oy < panelH; oy += panelH / steps) {
-        for(let ox = 0; ox < panelW; ox += panelW / steps) {
+      
+      // ひっくり返したサイズ（effPanelW/H）で計算を行う
+      for(let oy = 0; oy < effPanelH; oy += effPanelH / steps) {
+        for(let ox = 0; ox < effPanelW; ox += effPanelW / steps) {
            const currentLayout = [];
-           for (let y = oy; y <= hSpan - panelH; y += panelH) {
-             for (let x = ox; x <= wSpan - panelW; x += panelW) {
-                if (validatePanel(x, y, panelW, panelH, marginM, normalizedCoords)) {
+           for (let y = oy; y <= hSpan - effPanelH; y += effPanelH) {
+             for (let x = ox; x <= wSpan - effPanelW; x += effPanelW) {
+                if (validatePanel(x, y, effPanelW, effPanelH, marginM, normalizedCoords)) {
                   currentLayout.push({x, y});
                 }
              }
@@ -290,7 +291,6 @@ export default function Home() {
         }
       }
 
-      // ピクセル座標に戻す
       const realMetersToPx = (mx: number, my: number) => {
         const rx = mx / scale; const ry = (my * cosTheta) / scale;
         const px = rx * Math.cos(angleRad) - ry * Math.sin(angleRad);
@@ -301,12 +301,11 @@ export default function Home() {
       const finalPanelsPx: Array<number[]> = [];
       bestLayout.forEach(panel => {
         const absX = panel.x + minX; const absY = panel.y + minY;
-        const c1 = realMetersToPx(absX, absY); const c2 = realMetersToPx(absX + panelW, absY);
-        const c3 = realMetersToPx(absX + panelW, absY + panelH); const c4 = realMetersToPx(absX, absY + panelH);
+        const c1 = realMetersToPx(absX, absY); const c2 = realMetersToPx(absX + effPanelW, absY);
+        const c3 = realMetersToPx(absX + effPanelW, absY + effPanelH); const c4 = realMetersToPx(absX, absY + effPanelH);
         finalPanelsPx.push([...c1, ...c2, ...c3, ...c4]);
       });
 
-      // ON/OFF状態の維持（前回と枚数が同じなら記憶を引き継ぐ）
       const activePanels = finalPanelsPx.length === face.activePanels.length ? face.activePanels : new Array(finalPanelsPx.length).fill(true);
       const activeCount = activePanels.filter(v => v).length; 
       const capacity = activeCount * panelKw;
@@ -353,7 +352,6 @@ export default function Home() {
     });
   };
 
-  // 複数面の合算
   const totalCount = faces.reduce((sum, f) => sum + f.count, 0);
   const totalCapacity = faces.reduce((sum, f) => sum + f.capacity, 0);
   const totalAnnualGen = faces.reduce((sum, f) => sum + f.annualGen, 0);
@@ -382,7 +380,6 @@ export default function Home() {
 
       <aside className="w-[450px] bg-white border-l border-gray-200 shadow-sm p-4 flex flex-col overflow-y-auto h-full flex-none">
         
-        {/* === 共通設定エリア === */}
         <h2 className="text-sm font-semibold mb-3 border-b pb-1 text-gray-700">【共通】環境＆パネル設定</h2>
         <div className="space-y-3 mb-6">
           <div className="p-2 bg-red-50 rounded border border-red-100 flex items-center justify-between">
@@ -419,7 +416,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* === 個別設定（複数面）エリア === */}
         <h2 className="text-sm font-semibold mb-3 border-b pb-1 text-gray-700 flex justify-between items-end">
           <span>【個別】屋根面ごとの設定</span>
         </h2>
@@ -435,7 +431,8 @@ export default function Home() {
                   <button onClick={() => deleteFace(face.id)} className="text-[10px] text-red-500 hover:text-red-700 px-2 py-1 border border-red-200 rounded bg-white">削除</button>
                 </div>
                 
-                <div className="grid grid-cols-2 gap-2 mb-2">
+                {/* ★修正：方位・傾斜の横に「パネル配置（横置き/縦置き）」のスイッチを追加 */}
+                <div className="grid grid-cols-3 gap-2 mb-2">
                   <div>
                     <label className="text-[10px] text-gray-500 block mb-0.5">屋根の方位</label>
                     <select value={face.azimuth} onChange={(e) => updateFace(face.id, 'azimuth', Number(e.target.value))} className="border p-1.5 rounded w-full text-xs">
@@ -445,6 +442,13 @@ export default function Home() {
                   <div>
                     <label className="text-[10px] text-gray-500 block mb-0.5">傾斜(寸)</label>
                     <input type="number" value={face.pitch} onChange={(e) => updateFace(face.id, 'pitch', Number(e.target.value))} className="border p-1.5 rounded w-full text-xs text-right" step={0.5} min={0} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-0.5">パネル配置</label>
+                    <select value={face.orientation} onChange={(e) => updateFace(face.id, 'orientation', e.target.value)} className="border p-1.5 rounded w-full text-xs bg-yellow-50 border-yellow-300 font-bold text-yellow-900">
+                      <option value="landscape">横置き</option>
+                      <option value="portrait">縦置き</option>
+                    </select>
                   </div>
                 </div>
 
@@ -467,7 +471,6 @@ export default function Home() {
           )}
         </div>
 
-        {/* === 合算結果エリア === */}
         <div className="mt-4 border-t border-gray-200 pt-4 flex flex-col flex-none">
           <button onClick={handleSimulate} disabled={isLoadingDb || faces.length === 0} className={`w-full text-white font-bold py-3 px-4 rounded-lg shadow-md text-sm mb-4 ${isLoadingDb || faces.length === 0 ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
             全エリア一括シミュレーション
